@@ -51,6 +51,22 @@
   async function getNoteTypes() { if (!State.noteTypes) State.noteTypes = (await api('GET', '/note-types')).noteTypes; return State.noteTypes; }
   async function getConfig() { if (!State.config) State.config = await api('GET', '/config'); return State.config; }
   async function getLessons() { if (!State.lessons) State.lessons = await api('GET', '/lessons'); return State.lessons; }
+  async function getAppKit() { if (!State.appKit) State.appKit = await api('GET', '/app-kit'); return State.appKit; }
+
+  // ---- notifications (shared by managers + staff) ----
+  function bellHtml() { return '<button class="bell" id="notifBell" title="Notifications">🔔<span class="notif-dot" id="notifDot" style="display:none"></span></button>'; }
+  async function refreshNotifBadge() { try { const ns = await api('GET', '/notifications/mine'); const u = ns.filter((n) => !n.read).length; const d = $('#notifDot'); if (d) d.style.display = u ? 'block' : 'none'; } catch (e) { /* ignore */ } }
+  function wireBell() { const b = $('#notifBell'); if (b) { b.onclick = openNotifications; refreshNotifBadge(); } }
+  async function openNotifications() {
+    const ns = await api('GET', '/notifications/mine');
+    const list = ns.length
+      ? ns.map((n) => '<a href="' + (n.link || '#/') + '" class="notif-item ' + (n.read ? '' : 'unread') + '" data-id="' + n.id + '"><div class="ni-t">' + esc(n.title || '') + '</div>' + (n.body ? '<div class="ni-b">' + esc(n.body) + '</div>' : '') + '<div class="ni-d">' + fmtDate(n.created_at) + '</div></a>').join('')
+      : '<div class="empty"><span class="ic">🔕</span>No notifications yet.</div>';
+    openModal('<h2>Notifications</h2>' + (ns.some((n) => !n.read) ? '<button class="btn btn-ghost btn-sm" id="markAll" style="margin-bottom:.6rem">Mark all read</button>' : '') + '<div class="notif-list">' + list + '</div><div class="modal-foot"><button class="btn btn-ghost" id="nClose">Close</button></div>');
+    $('#nClose').onclick = closeModal;
+    const ma = $('#markAll'); if (ma) ma.onclick = async () => { await api('POST', '/notifications/read', {}); closeModal(); refreshNotifBadge(); };
+    root().querySelectorAll('.notif-item').forEach((a) => { a.onclick = async () => { await api('POST', '/notifications/read', { id: a.getAttribute('data-id') }); refreshNotifBadge(); }; });
+  }
   const money = (n) => '$' + Number(n).toFixed(2);
   const ownerLabel = (o) => ({ manager: 'You', senior_manager: 'Senior mgr', buddy: 'Buddy', staff: 'Staff' }[o] || o);
   function relativeDue(d) { if (d < 0) return 'Overdue by ' + (-d) + ' day' + (-d === 1 ? '' : 's'); if (d === 0) return 'Due today'; if (d === 1) return 'Due tomorrow'; if (d <= 21) return 'Due in ' + d + ' days'; return 'Due in ~' + Math.round(d / 7) + ' weeks'; }
@@ -119,6 +135,10 @@
       '<div class="nav-group-label">Develop</div>' +
       item('career', '#/career', '🚀', 'Career paths') +
       item('feedback', '#/feedback', '💬', 'Feedback') +
+      '<div class="nav-group-label">Team pulse</div>' +
+      item('productivity', '#/productivity', '📊', 'Productivity') +
+      item('leave', '#/leave', '🌴', 'Leave') +
+      item('suggestions', '#/suggestions', '💡', 'Suggestions') +
       '<div class="nav-group-label">Learn</div>' +
       item('guide', '#/guide', '⚖️', 'Fair Work guide') +
       '<div class="sidebar-foot"><div class="biz">' + esc(b.name) + '</div>' +
@@ -128,12 +148,13 @@
       '<div class="topbar"><div><button class="menu-btn" id="menuBtn">☰</button> ' +
       '<h2 style="display:inline-block;margin-left:.4rem">' + esc(title) + '</h2>' +
       (crumbs ? '<div class="crumbs">' + crumbs + '</div>' : '') + '</div>' +
-      '<div style="display:flex;gap:.5rem"><button class="btn btn-ghost btn-sm" id="quickNoteBtn">✎ Quick note</button><a href="#/new" class="btn btn-primary btn-sm">+ Start something</a></div></div>' +
+      '<div style="display:flex;gap:.5rem;align-items:center">' + bellHtml() + '<button class="btn btn-ghost btn-sm" id="quickNoteBtn">✎ Quick note</button><a href="#/new" class="btn btn-primary btn-sm">+ Start something</a></div></div>' +
       '<div class="content" id="view">' + content + '</div>' +
       '</main></div>';
     $('#logout').onclick = async (e) => { e.preventDefault(); await api('POST', '/auth/logout'); State.me = null; location.hash = '#login'; routeChanged(); };
     const mb = $('#menuBtn'); if (mb) mb.onclick = () => $('#sidebar').classList.toggle('open');
     const qn = $('#quickNoteBtn'); if (qn) qn.onclick = () => openQuickNote();
+    wireBell();
   }
 
   // ---------------- auth ----------------
@@ -801,6 +822,7 @@
 
   // ---------------- HIRING / recruitment ----------------
   async function getInterviewKit() { if (!State.kit) State.kit = await api('GET', '/interview-kit'); return State.kit; }
+  async function getReferenceKit() { if (!State.refKit) State.refKit = await api('GET', '/reference-kit'); return State.refKit; }
   const CAND_STATUS = {
     new: { label: 'Added', cls: '' }, applied: { label: 'Applied', cls: 'badge-proactive' },
     interview: { label: 'Interviewing', cls: 'badge-watchful' }, offer: { label: 'Offer sent', cls: 'badge-proactive' },
@@ -842,7 +864,7 @@
   }
 
   async function viewCandidate(id) {
-    const [c, kit] = await Promise.all([api('GET', '/candidates/' + id), getInterviewKit()]);
+    const [c, kit, refKit, refs] = await Promise.all([api('GET', '/candidates/' + id), getInterviewKit(), getReferenceKit(), api('GET', '/candidates/' + id + '/references')]);
     const link = location.origin + '/c/' + c.token;
     const iv = c.interview && typeof c.interview === 'object' ? c.interview : {};
     iv.asked = iv.asked || {}; iv.notes = iv.notes || {}; iv.gut = iv.gut || {};
@@ -876,6 +898,18 @@
     else if (c.status === 'offer') actionHtml = '<div class="panel"><strong>Offer sent — waiting on ' + esc(fn) + '</strong><div class="muted" style="font-size:.9rem;margin:.2rem 0">They can accept on their link, or record it here.</div><div class="link-box"><code>' + esc(link) + '</code><button class="btn btn-ghost btn-sm" id="copyOfferLink">Copy</button></div><div style="display:flex;gap:.5rem;margin-top:.6rem"><button class="btn btn-primary btn-sm" id="markAccepted">✓ They accepted</button><button class="btn btn-ghost btn-sm" id="makeOffer2">Edit / re-send offer</button></div></div>';
     else actionHtml = '<div class="panel"><strong>Ready to make an offer?</strong><div class="muted" style="font-size:.9rem;margin:.2rem 0 .7rem">Offsider writes the offer email for you and gives them a one-click accept link.</div><button class="btn btn-primary" id="makeOffer">💼 Make an offer</button></div>';
 
+    // references
+    const fillRef = (s) => String(s || '').replace(/\{\{managerName\}\}/g, State.me.name).replace(/\{\{businessName\}\}/g, State.me.business.name).replace(/\{\{candidateName\}\}/g, c.name).replace(/\{\{roleTitle\}\}/g, c.role_applied || 'the role');
+    const refRow = (r) => {
+      const rlink = location.origin + '/r/' + r.token;
+      const sb = r.status === 'received' ? '<span class="badge badge-positive">Received ✓</span>' : '<span class="badge">Awaiting</span>';
+      const ans = r.answers ? '<details style="margin-top:.5rem"><summary class="muted" style="cursor:pointer">View answers</summary>' + (refKit.questions || []).map((q, i) => r.answers['r' + i] ? ('<div class="resp-q" style="margin-top:.4rem">' + esc(fillRef(q.question)) + '</div><div class="resp-a">' + esc(r.answers['r' + i]) + '</div>') : '').join('') + (r.notes ? '<div class="resp-q" style="margin-top:.4rem">Your notes</div><div class="resp-a">' + esc(r.notes) + '</div>' : '') + '</details>' : '';
+      return '<div class="card card-pad" style="margin-bottom:.6rem"><div><strong>' + esc(r.referee_name || 'Referee') + '</strong> ' + sb + '<div class="muted" style="font-size:.86rem">' + [r.relationship, r.company, r.phone, r.email].filter(Boolean).map(esc).join(' · ') + '</div></div><div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.6rem"><button class="btn btn-ghost btn-sm ref-copy" data-l="' + esc(rlink) + '">📋 Copy link</button><button class="btn btn-ghost btn-sm ref-email" data-id="' + r.id + '">✉️ Email text</button><button class="btn btn-primary btn-sm ref-fill" data-id="' + r.id + '">' + (r.status === 'received' ? 'Edit answers' : 'Record by phone') + '</button></div>' + ans + '</div>';
+    };
+    const refSection = '<div class="section-title" style="margin-top:1.8rem"><h3>📞 Reference checks</h3><button class="btn btn-primary btn-sm" id="addReferee">+ Add a referee</button></div>' +
+      '<details class="dna" style="border-color:var(--brand);background:var(--brand-50)"><summary style="color:var(--brand)">📋 How to run a reference call (script + what to ask)</summary><div class="dna-body"><p style="margin:.6rem 0;white-space:pre-wrap">' + esc(fillRef(refKit.intro)) + '</p><div class="dna-instead">' + esc(refKit.lawfulNote || '') + '</div></div></details>' +
+      (refs.length ? refs.map(refRow).join('') : '<div class="muted">No referees yet. Add one, then send them a link to fill out — or call them and record their answers.</div>');
+
     const header = '<div><h1 style="margin:0 0 .15rem">' + esc(c.name) + '</h1><div class="muted">' + esc(c.role_applied || 'Role TBC') + ' &nbsp;·&nbsp; ' + statusBadge(c.status) + '</div>' +
       ((c.email || c.phone) ? '<div class="muted" style="font-size:.86rem;margin-top:.25rem">' + [c.email, c.phone].filter(Boolean).map(esc).join(' &nbsp;·&nbsp; ') + '</div>' : '') + '</div>';
 
@@ -887,6 +921,7 @@
       '<div class="guard-banner">🧭 <strong>Ask about the job, not the person.</strong> Tick what you asked and jot their answers — every question below is lawful to ask.</div>' +
       lawfulHtml + jobHtml +
       '<details class="dna"><summary>⚠️ Questions you must NOT ask — and what to ask instead</summary><div class="dna-body">' + dnaHtml + '</div></details>' +
+      refSection +
       '<div class="section-title" style="margin-top:1.4rem"><h3>🤔 Your read on them</h3></div>' + gutHtml +
       '<div class="field"><label>Things to tell the candidate (about the role, pay, next steps)</label><textarea id="tellThem" rows="2">' + esc(iv.tellThem || '') + '</textarea></div>' +
       '<div class="section-title" style="margin-top:1.8rem"><h3>📄 Resume / notes</h3></div>' +
@@ -909,6 +944,40 @@
     const mo2 = $('#makeOffer2'); if (mo2) mo2.onclick = () => openOffer(c);
     const ma = $('#markAccepted'); if (ma) ma.onclick = async () => { await api('PATCH', '/candidates/' + id, { status: 'accepted' }); toast('Marked as accepted'); viewCandidate(id); };
     const hb = $('#hireBtn'); if (hb) hb.onclick = async () => { const r = await api('POST', '/candidates/' + id + '/hire'); toast('Welcome aboard! Onboarding started'); location.hash = '#/member/' + r.employee_id; };
+    const ar = $('#addReferee'); if (ar) ar.onclick = () => openAddReferee(id);
+    root().querySelectorAll('.ref-copy').forEach((b) => { b.onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(b.getAttribute('data-l')); toast('Reference link copied'); }; });
+    root().querySelectorAll('.ref-email').forEach((b) => { b.onclick = () => { const r = refs.find((x) => x.id === b.getAttribute('data-id')); if (r) openRefEmail(r, refKit, c); }; });
+    root().querySelectorAll('.ref-fill').forEach((b) => { b.onclick = () => { const r = refs.find((x) => x.id === b.getAttribute('data-id')); if (r) openReferenceAnswers(r, refKit, c); }; });
+  }
+
+  async function openAddReferee(candidateId) {
+    openModal('<h2>Add a referee</h2><p class="muted">Add their details, then send them a link or call them.</p>' +
+      '<div class="field"><label>Referee name *</label><input id="rfName" placeholder="e.g. Dana Lee"></div>' +
+      '<div class="grid grid-2"><div class="field"><label>Relationship</label><input id="rfRel" placeholder="e.g. Former supervisor"></div><div class="field"><label>Company</label><input id="rfCo" placeholder="Where they worked together"></div></div>' +
+      '<div class="grid grid-2"><div class="field"><label>Phone</label><input id="rfPhone"></div><div class="field"><label>Email</label><input id="rfEmail"></div></div>' +
+      '<div class="modal-foot"><button class="btn btn-ghost" id="rfCancel">Cancel</button><button class="btn btn-primary" id="rfSave">Add referee</button></div>');
+    $('#rfCancel').onclick = closeModal;
+    $('#rfSave').onclick = async () => {
+      const n = $('#rfName').value.trim(); if (!n) { toast('A name is needed', 'error'); return; }
+      await api('POST', '/candidates/' + candidateId + '/references', { referee_name: n, relationship: $('#rfRel').value.trim(), company: $('#rfCo').value.trim(), phone: $('#rfPhone').value.trim(), email: $('#rfEmail').value.trim() });
+      closeModal(); toast('Referee added'); viewCandidate(candidateId);
+    };
+  }
+  function openReferenceAnswers(r, refKit, c) {
+    const ans = r.answers || {};
+    const fill = (s) => String(s || '').replace(/\{\{candidateName\}\}/g, c.name).replace(/\{\{roleTitle\}\}/g, c.role_applied || 'the role').replace(/\{\{businessName\}\}/g, State.me.business.name);
+    const qs = (refKit.questions || []).map((q, i) => '<div class="field"><label>' + esc(fill(q.question)) + '</label><textarea data-r="r' + i + '" rows="2">' + esc(ans['r' + i] || '') + '</textarea></div>').join('');
+    openModal('<h2>Reference — ' + esc(r.referee_name || '') + '</h2><p class="muted">Jot their answers as you talk — saves to the candidate\'s file.</p>' + qs + '<div class="field"><label>Your notes</label><textarea id="refNotes" rows="2">' + esc(r.notes || '') + '</textarea></div><div class="modal-foot"><button class="btn btn-ghost" id="raCancel">Cancel</button><button class="btn btn-primary" id="raSave">Save reference</button></div>');
+    $('#raCancel').onclick = closeModal;
+    $('#raSave').onclick = async () => { const a = {}; root().querySelectorAll('[data-r]').forEach((t) => { a[t.getAttribute('data-r')] = t.value; }); await api('PATCH', '/references/' + r.id, { answers: a, notes: $('#refNotes').value, status: 'received' }); closeModal(); toast('Reference saved'); viewCandidate(c.id); };
+  }
+  function openRefEmail(r, refKit, c) {
+    const data = { candidateName: c.name, roleTitle: c.role_applied || 'the role', businessName: State.me.business.name, managerName: State.me.name };
+    const fill = (s) => String(s || '').replace(/\{\{(\w+)\}\}/g, (_, k) => (data[k] != null ? data[k] : ''));
+    const subj = fill((refKit.requestEmail || {}).subject), body = fill((refKit.requestEmail || {}).body);
+    openModal('<h2>Reference request email</h2><p class="muted">Copy this to ' + esc(r.referee_name || 'the referee') + ' — or just send them their link.</p><div class="field"><label>Subject</label><input value="' + esc(subj) + '" readonly></div><div class="field"><label>Message</label><textarea rows="10" readonly>' + esc(body) + '</textarea></div><div class="field"><label>Their link</label><div class="link-box"><code>' + esc(location.origin + '/r/' + r.token) + '</code></div></div><div class="modal-foot"><button class="btn btn-ghost" id="reClose">Close</button><button class="btn btn-primary" id="reCopy">Copy email</button></div>');
+    $('#reClose').onclick = closeModal;
+    $('#reCopy').onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(subj + '\n\n' + body); toast('Email copied'); };
   }
 
   async function openOffer(c) {
@@ -936,6 +1005,7 @@
 
   async function viewMember(id) {
     const e = await api('GET', '/employees/' + id);
+    const [mPlans, mWorklog] = await Promise.all([api('GET', '/employees/' + id + '/plans'), api('GET', '/employees/' + id + '/worklog')]);
     e.development = e.development || {};
     e.development.goals = e.development.goals || [];
     e.development.skills = e.development.skills || {};
@@ -1042,6 +1112,18 @@
     const lessonsSection = '<div class="section-title" style="margin-top:1.8rem"><h3>🎓 Lessons & tests</h3><button class="btn btn-ghost btn-sm" id="assignLesson">+ Assign a lesson</button></div>' +
       ((e.lessons && e.lessons.length) ? '<div class="row-list">' + e.lessons.map((s) => '<div class="row" style="cursor:default"><span class="ic-circle">🎓</span><span class="grow"><span class="t">' + esc(s.title) + '</span>' + (s.competencyLabel ? '<span class="s">signs off: ' + esc(s.competencyLabel) + '</span>' : '') + '</span><span class="meta">' + lessonStatus(s) + '</span></div>').join('') + '</div>' : '<div class="muted">No lessons assigned yet. Assign one — passing it ticks the competency.</div>');
 
+    // 📅 plan & work log
+    const recentPlans = (mPlans || []).slice(0, 3);
+    const planList = recentPlans.length
+      ? '<div class="row-list">' + recentPlans.map((p) => '<div class="row" style="cursor:default"><span class="ic-circle">📅</span><span class="grow"><span class="t">' + esc(p.title || ((p.period === 'week' ? 'Weekly' : 'Daily') + ' plan')) + '</span><span class="s">' + (p.period === 'week' ? 'Week of ' : '') + esc(p.plan_date || '') + ' · ' + (p.items ? p.items.length : 0) + ' tasks</span></span></div>').join('') + '</div>'
+      : '<div class="muted">No plans set yet.</div>';
+    const wlDays = {}; (mWorklog || []).forEach((en) => { wlDays[en.occurred_on] = 1; });
+    const wlSummary = (mWorklog || []).length
+      ? '<div class="muted" style="font-size:.9rem">' + mWorklog.length + ' entries logged over ' + Object.keys(wlDays).length + ' day' + (Object.keys(wlDays).length === 1 ? '' : 's') + ' (last 7 days).</div><div class="row-list" style="margin-top:.5rem">' + mWorklog.slice(0, 8).map((en) => '<div class="row" style="cursor:default"><span class="ic-circle">📝</span><span class="grow"><span class="t">' + esc(en.label || en.note || 'Work') + (en.quantity != null ? ' · <strong>' + en.quantity + (en.unit === 'hours' ? 'h' : '') + '</strong>' : '') + '</span><span class="s">' + esc(en.occurred_on) + '</span></span></div>').join('') + '</div>'
+      : '<div class="muted">Nothing logged yet — it appears here once they use the app.</div>';
+    const planSection = '<div class="section-title" style="margin-top:1.8rem"><h3>📅 Plan &amp; work log</h3><button class="btn btn-ghost btn-sm" id="assignPlan">+ Set a plan</button></div>' + planList +
+      '<div style="margin-top:1rem"><div class="muted" style="font-weight:700;font-size:.82rem;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.4rem">Recent work logged</div>' + wlSummary + '</div>';
+
     // 📅 lifecycle plan
     const firstName = (e.name || '').split(' ')[0];
     const sched = (e.schedule || []).filter((m) => !m.done);
@@ -1057,7 +1139,7 @@
       header + scheduleSection +
       '<div class="section-title" style="margin-top:1.8rem"><h3>💰 Pay & progression</h3></div>' + wagePanel +
       '<div class="section-title" style="margin-top:1.8rem"><h3>🚀 Development</h3></div>' + devPanel +
-      lessonsSection +
+      lessonsSection + planSection +
       '<div class="section-title" style="margin-top:1.8rem"><h3>📝 Notes & observations</h3></div>' + notesList + noteForm +
       casesSection + docsSection, '<a href="#/team">Workers</a>');
 
@@ -1095,6 +1177,7 @@
     const qh = $('#quickNoteHere'); if (qh) qh.onclick = () => openQuickNote(e.id);
     const rb = $('#reflectBtn'); if (rb) rb.onclick = () => openReflection(e);
     const al = $('#assignLesson'); if (al) al.onclick = () => openLessonAssign(e.id);
+    const ap = $('#assignPlan'); if (ap) ap.onclick = () => openPlanModal(e.id);
     root().querySelectorAll('.moment-done').forEach((b) => { b.onclick = async () => { await api('POST', '/lifecycle/done', { employee_id: e.id, rule_id: b.dataset.r, occurrence_key: b.dataset.k }); viewMember(e.id); }; });
     root().querySelectorAll('.moment-do').forEach((b) => { b.onclick = () => { const m = (e.schedule || []).find((x) => x.rule_id === b.dataset.r && x.occurrence_key === b.dataset.k); if (m) doMoment(e, m); }; });
   }
@@ -1222,19 +1305,65 @@
     };
   }
 
+  // ---------------- MANAGER: productivity / leave / suggestions ----------------
+  async function viewProductivity() {
+    const days = 7;
+    const data = await api('GET', '/productivity?days=' + days);
+    const max = Math.max(1, ...data.workers.map((w) => w.entries));
+    const rows = data.workers.length
+      ? data.workers.map((w) => {
+        const cats = Object.keys(w.byCategory).sort((a, b) => w.byCategory[b] - w.byCategory[a]).slice(0, 3).map((c) => c.replace(/_/g, ' ') + ' ×' + w.byCategory[c]).join(', ');
+        return '<a href="#/member/' + w.employee_id + '" class="row"><span class="ic-circle">📊</span><span class="grow"><span class="t">' + esc(w.name) + '</span><span class="s">' + w.entries + ' entries · active ' + w.activeDays + '/' + days + ' days' + (cats ? ' · ' + esc(cats) : '') + '</span></span><span class="meta" style="min-width:90px"><div class="prod-bar"><div class="prod-fill" style="width:' + Math.round(w.entries / max * 100) + '%"></div></div></span></a>';
+      }).join('')
+      : '<div class="empty"><span class="ic">📊</span>No work logged yet.<br>When your team logs their work in the app, it shows up here.</div>';
+    layout('productivity', 'Productivity', '<div class="section-title"><h3>Last ' + days + ' days</h3><span class="muted" style="font-size:.85rem">since ' + fmtDate(data.from) + '</span></div><p class="muted" style="max-width:64ch;margin-top:-.3rem">What your team\'s been logging from the app. Tap a worker for the detail.</p><div class="row-list">' + rows + '</div>');
+  }
+
+  async function viewLeave() {
+    const reqs = await api('GET', '/leave');
+    const pending = reqs.filter((r) => r.status === 'pending');
+    const decided = reqs.filter((r) => r.status !== 'pending');
+    const card = (l) => '<div class="card card-pad" style="margin-bottom:.7rem"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem"><div><strong>' + esc(l.employee_name) + '</strong> <span class="muted">— ' + esc(l.leave_type || 'Leave') + '</span><div class="muted" style="font-size:.9rem">' + esc(l.start_date) + (l.end_date && l.end_date !== l.start_date ? ' → ' + esc(l.end_date) : '') + '</div>' + (l.note ? '<div style="margin-top:.3rem">' + esc(l.note) + '</div>' : '') + '</div>' + (l.status === 'pending' ? '<div style="display:flex;gap:.4rem;flex:none"><button class="btn btn-positive btn-sm lv-ok" data-id="' + l.id + '">Approve</button><button class="btn btn-ghost btn-sm lv-no" data-id="' + l.id + '">Decline</button></div>' : '<span class="badge ' + (l.status === 'approved' ? 'badge-positive' : 'badge-watchful') + '" style="flex:none">' + (l.status === 'approved' ? 'Approved' : 'Declined') + '</span>') + '</div></div>';
+    layout('leave', 'Leave',
+      '<div class="section-title"><h3>Waiting on you (' + pending.length + ')</h3></div>' + (pending.length ? pending.map(card).join('') : '<div class="muted">Nothing waiting on you. 👍</div>') +
+      (decided.length ? '<div class="section-title" style="margin-top:1.8rem"><h3>Recent</h3></div>' + decided.slice(0, 20).map(card).join('') : ''));
+    root().querySelectorAll('.lv-ok').forEach((b) => { b.onclick = async () => { await api('POST', '/leave/' + b.getAttribute('data-id') + '/decide', { status: 'approved' }); toast('Approved'); viewLeave(); }; });
+    root().querySelectorAll('.lv-no').forEach((b) => { b.onclick = async () => { await api('POST', '/leave/' + b.getAttribute('data-id') + '/decide', { status: 'declined' }); toast('Declined'); viewLeave(); }; });
+  }
+
+  async function viewSuggestions() {
+    const sg = await api('GET', '/suggestions');
+    const nu = sg.filter((s) => s.status === 'new');
+    const card = (s) => '<div class="card card-pad" style="margin-bottom:.7rem"><div style="display:flex;justify-content:space-between;gap:1rem"><div class="grow"><div class="muted" style="font-size:.8rem">' + (s.category ? esc(s.category) + ' · ' : '') + (s.anonymous ? '🔒 Anonymous' : esc(s.employee_name || 'Someone')) + ' · ' + fmtDate(s.created_at) + '</div><div style="margin-top:.2rem">' + esc(s.body) + '</div></div>' + (s.status === 'new' ? '<button class="btn btn-ghost btn-sm sg-seen" data-id="' + s.id + '" style="flex:none">✓ Mark seen</button>' : '<span class="badge" style="flex:none">Seen</span>') + '</div></div>';
+    layout('suggestions', 'Suggestions',
+      '<p class="muted" style="max-width:64ch">Ideas, concerns and wins from your team — new ones are notified to you.</p>' +
+      '<div class="section-title"><h3>New (' + nu.length + ')</h3></div>' + (nu.length ? nu.map(card).join('') : '<div class="muted">Nothing new right now.</div>') +
+      ((sg.length - nu.length) > 0 ? '<div class="section-title" style="margin-top:1.8rem"><h3>Earlier</h3></div>' + sg.filter((s) => s.status !== 'new').map(card).join('') : ''));
+    root().querySelectorAll('.sg-seen').forEach((b) => { b.onclick = async () => { await api('POST', '/suggestions/' + b.getAttribute('data-id') + '/status', { status: 'seen' }); viewSuggestions(); }; });
+  }
+
   // ---------------- STAFF portal ----------------
-  function staffLayout(content) {
+  function staffLayout(content, active) {
+    const tab = (key, href, ic, label) => '<a href="' + href + '" class="staff-tab ' + (active === key ? 'active' : '') + '"><span class="st-ic">' + ic + '</span><span class="st-l">' + label + '</span></a>';
     root().innerHTML =
       '<div class="staff-wrap">' +
-      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.4rem">' +
+      '<div class="staff-top">' +
       '<a href="#/" class="logo">' + LOGO + 'Offsider</a>' +
-      '<div style="text-align:right"><div style="font-weight:700">' + esc(State.me.name) + '</div><div class="muted" style="font-size:.85rem">' + esc(State.me.business.name) + ' · <a href="#" id="logout">Log out</a></div></div></div>' +
-      '<div id="view">' + content + '</div></div>';
+      '<div style="display:flex;align-items:center;gap:.6rem">' + bellHtml() + '<div style="text-align:right"><div style="font-weight:700;font-size:.9rem">' + esc(State.me.name.split(' ')[0]) + '</div><a href="#" id="logout" class="muted" style="font-size:.8rem">Log out</a></div></div></div>' +
+      '<div id="view" class="staff-view">' + content + '</div>' +
+      '<nav class="staff-tabs">' +
+      tab('home', '#/', '🏠', 'Home') +
+      tab('log', '#/log', '➕', 'Log work') +
+      tab('leave', '#/leave', '🌴', 'Leave') +
+      tab('say', '#/say', '💬', 'Say') +
+      tab('training', '#/training', '🎓', 'Training') +
+      '</nav></div>';
     $('#logout').onclick = async (e) => { e.preventDefault(); await api('POST', '/auth/logout'); State.me = null; location.hash = '#login'; routeChanged(); };
+    wireBell();
   }
 
   async function viewStaffHome() {
-    const [me, assignments, myLessons] = await Promise.all([api('GET', '/me'), api('GET', '/me/assignments'), api('GET', '/me/lessons')]);
+    const [me, assignments, myLessons, plans] = await Promise.all([api('GET', '/me'), api('GET', '/me/assignments'), api('GET', '/me/lessons'), api('GET', '/me/plans')]);
     const pending = assignments.filter((a) => !a.completed);
     const done = assignments.filter((a) => a.completed);
     const checkins = pending.length
@@ -1245,6 +1374,12 @@
         ? '<div class="row" style="cursor:default"><span class="ic-circle" style="background:var(--positive-50)">✅</span><span class="grow"><span class="t">' + esc(l.title) + '</span><span class="s">Passed' + (l.score != null ? ' · ' + Math.round(l.score * 100) + '%' : '') + (l.competencyLabel ? ' · signed off ' + esc(l.competencyLabel) : '') + '</span></span></div>'
         : '<a href="#/lesson/' + l.lesson_id + '" class="row"><span class="ic-circle">🎓</span><span class="grow"><span class="t">' + esc(l.title) + '</span><span class="s">' + esc(l.blurb || '') + '</span></span><span class="meta">Start →</span></a>').join('') + '</div>'
       : '';
+
+    const todayD = todayStr();
+    const dayPlan = (plans || []).find((p) => p.period === 'day' && p.plan_date === todayD);
+    const weekPlan = (plans || []).find((p) => p.period === 'week');
+    const planCard = (p, label) => '<div class="panel" style="margin-bottom:.8rem"><div class="wizard-kind">' + label + '</div>' + (p.title ? '<h3 style="margin:.1rem 0 .5rem">' + esc(p.title) + '</h3>' : '') + ((p.items && p.items.length) ? '<ul class="plan-list">' + p.items.map((it) => '<li>' + esc(typeof it === 'string' ? it : (it.text || '')) + '</li>').join('') + '</ul>' : '') + (p.note ? '<p class="muted" style="margin-top:.4rem">' + esc(p.note) + '</p>' : '') + '</div>';
+    const plansHtml = (dayPlan || weekPlan) ? ((dayPlan ? planCard(dayPlan, 'Today’s plan') : '') + (weekPlan ? planCard(weekPlan, 'This week') : '')) : '';
 
     const w = me.wage;
     let pathCard = '';
@@ -1258,11 +1393,14 @@
         '</div>';
     }
     staffLayout(
-      '<h1 style="font-size:1.8rem;margin-bottom:.2rem">G\'day, ' + esc(State.me.name.split(' ')[0]) + '</h1>' +
-      '<p class="muted">Anything the team needs from you is below — most take a minute.</p>' +
-      '<div class="section-title"><h3>📋 Your check-ins</h3>' + (done.length ? '<span class="muted" style="font-size:.85rem">' + done.length + ' done this period</span>' : '') + '</div>' + checkins +
+      '<h1 style="font-size:1.7rem;margin-bottom:.2rem">G\'day, ' + esc(State.me.name.split(' ')[0]) + '</h1>' +
+      '<p class="muted">Here\'s your day — most of this takes a minute.</p>' +
+      (plansHtml ? '<div class="section-title"><h3>🎯 Your plan</h3></div>' + plansHtml : '') +
+      '<a href="#/log" class="cta-log">➕ Log today\'s work</a>' +
+      '<div class="section-title" style="margin-top:1.4rem"><h3>📋 Your check-ins</h3>' + (done.length ? '<span class="muted" style="font-size:.85rem">' + done.length + ' done this period</span>' : '') + '</div>' + checkins +
       (lessonsHtml ? '<div class="section-title" style="margin-top:1.8rem"><h3>📚 Your lessons</h3></div>' + lessonsHtml : '') +
-      (pathCard ? '<div class="section-title" style="margin-top:1.8rem"><h3>Your career & pay</h3></div>' + pathCard : ''));
+      (pathCard ? '<div class="section-title" style="margin-top:1.8rem"><h3>Your career & pay</h3></div>' + pathCard : ''),
+      'home');
   }
 
   async function viewStaffCheckin(id) {
@@ -1309,12 +1447,132 @@
     };
   }
 
+  function openPlanModal(employeeId) {
+    openModal('<h2>Set a plan</h2><p class="muted">Give them a clear plan for the day or week — it shows up in their app.</p>' +
+      '<div class="grid grid-2"><div class="field"><label>For</label><select id="plPeriod"><option value="day">Today</option><option value="week">This week</option></select></div><div class="field"><label>Date</label><input type="date" id="plDate" value="' + todayStr() + '"></div></div>' +
+      '<div class="field"><label>Title</label><input id="plTitle" placeholder="e.g. Cardiff site testing"></div>' +
+      '<div class="field"><label>Tasks (one per line)</label><textarea id="plItems" rows="5" placeholder="Density tests at lot 14&#10;Concrete cylinders for the Mayfield job&#10;Log samples from yesterday"></textarea></div>' +
+      '<div class="field"><label>Note (optional)</label><input id="plNote" placeholder="Anything else"></div>' +
+      '<div class="modal-foot"><button class="btn btn-ghost" id="plCancel">Cancel</button><button class="btn btn-primary" id="plSave">Send plan</button></div>');
+    $('#plCancel').onclick = closeModal;
+    $('#plSave').onclick = async () => {
+      const items = $('#plItems').value.split('\n').map((s) => s.trim()).filter(Boolean).map((t) => ({ text: t }));
+      await api('POST', '/employees/' + employeeId + '/plans', { period: $('#plPeriod').value, plan_date: $('#plDate').value, title: $('#plTitle').value.trim(), items: items, note: $('#plNote').value.trim() });
+      closeModal(); toast('Plan sent'); viewMember(employeeId);
+    };
+  }
+
   async function openLessonAssign(employeeId) {
     const ls = await getLessons();
     const opts = ls.map((l) => '<button class="choice makelesson" data-l="' + l.id + '" style="margin-bottom:.4rem">' + esc(l.title) + '<span class="note">' + esc(l.blurb || '') + (l.competencyLabel ? ' · signs off: ' + esc(l.competencyLabel) : '') + '</span></button>').join('');
     openModal('<h2>Assign a lesson</h2><p class="muted">They\'ll get it in their portal to read and sit the quiz. Passing ticks the competency automatically.</p>' + opts + '<div class="modal-foot"><button class="btn btn-ghost" id="lCancel">Cancel</button></div>');
     $('#lCancel').onclick = closeModal;
     root().querySelectorAll('.makelesson').forEach((b) => { b.onclick = async () => { await api('POST', '/employees/' + employeeId + '/lessons', { lesson_id: b.getAttribute('data-l') }); closeModal(); toast('Lesson assigned'); viewMember(employeeId); }; });
+  }
+
+  // ---- worker app: log work ----
+  async function viewStaffLog(date) {
+    date = date || todayStr();
+    const [kit, wl] = await Promise.all([getAppKit(), api('GET', '/me/worklog?date=' + date)]);
+    const cats = {}; (kit.worklog.categories || []).forEach((c) => { cats[c.id] = c; });
+    const presets = kit.worklog.presets || [];
+    const byCat = {}; presets.forEach((p) => { (byCat[p.category] = byCat[p.category] || []).push(p); });
+    const chips = Object.keys(byCat).map((cid) => {
+      const c = cats[cid] || { label: cid, icon: '•' };
+      return '<div class="log-cat"><div class="log-cat-h">' + (c.icon || '') + ' ' + esc(c.label) + '</div><div class="chip-grid">' +
+        byCat[cid].map((p) => '<button class="log-chip" data-idx="' + presets.indexOf(p) + '">' + esc(p.label) + (p.unit === 'hours' ? ' <span class="cu">hrs</span>' : (p.unit === 'count' ? ' <span class="cu">#</span>' : '')) + '</button>').join('') + '</div></div>';
+    }).join('');
+    const entries = wl.entries.length
+      ? '<div class="row-list">' + wl.entries.map((en) => '<div class="row" style="cursor:default"><span class="ic-circle">' + (cats[en.category] ? cats[en.category].icon : '📝') + '</span><span class="grow"><span class="t">' + esc(en.label || en.note || 'Work') + (en.quantity != null ? ' · <strong>' + en.quantity + (en.unit === 'hours' ? 'h' : '') + '</strong>' : '') + '</span>' + (en.note && en.label ? '<span class="s">' + esc(en.note) + '</span>' : '') + '</span><button class="btn btn-ghost btn-sm wl-del" data-id="' + en.id + '">✕</button></div>').join('') + '</div>'
+      : '<div class="muted">Nothing logged yet for this day. Tap something above ☝️</div>';
+    staffLayout(
+      '<h1 style="font-size:1.6rem;margin-bottom:.1rem">Log your work</h1><p class="muted">Tap what you did — takes seconds, and it helps the boss see what the team\'s getting through.</p>' +
+      '<div class="log-datebar"><input type="date" id="logDate" value="' + date + '" max="' + todayStr() + '"><span class="muted">' + (date === todayStr() ? 'Today' : fmtDate(date)) + '</span></div>' +
+      chips +
+      '<button class="btn btn-ghost btn-block" id="logOther" style="margin:.2rem 0 1.2rem">+ Something else</button>' +
+      '<div class="section-title"><h3>Logged ' + (date === todayStr() ? 'today' : '') + ' (' + wl.entries.length + ')</h3></div>' + entries,
+      'log');
+    $('#logDate').onchange = (e) => viewStaffLog(e.target.value);
+    root().querySelectorAll('.log-chip').forEach((b) => { b.onclick = () => openQuickLog(presets[parseInt(b.getAttribute('data-idx'), 10)], date); });
+    $('#logOther').onclick = () => openQuickLog({ label: '', category: 'other', unit: 'none' }, date);
+    root().querySelectorAll('.wl-del').forEach((b) => { b.onclick = async () => { await api('DELETE', '/me/worklog/' + b.getAttribute('data-id')); viewStaffLog(date); }; });
+  }
+  function openQuickLog(item, date) {
+    const free = !item.label;
+    const needsQty = item.unit === 'count' || item.unit === 'hours';
+    openModal('<h2>' + (free ? 'Log something' : esc(item.label)) + '</h2>' + (item.hint ? '<p class="muted">' + esc(item.hint) + '</p>' : '') +
+      (free ? '<div class="field"><label>What did you do?</label><input id="qLogLabel" placeholder="e.g. Helped on the Cardiff site"></div>' : '') +
+      (needsQty ? '<div class="field"><label>' + (item.unit === 'hours' ? 'Hours' : 'How many?') + '</label><input type="number" id="qLogN" value="1" min="0" step="' + (item.unit === 'hours' ? '0.5' : '1') + '" inputmode="decimal"></div>' : '') +
+      '<div class="field"><label>Note (optional)</label><input id="qLogNote" placeholder="Job, site, anything"></div>' +
+      '<div class="modal-foot"><button class="btn btn-ghost" id="qlCancel">Cancel</button><button class="btn btn-primary" id="qlSave">Add it</button></div>');
+    $('#qlCancel').onclick = closeModal;
+    $('#qlSave').onclick = async () => {
+      const label = free ? $('#qLogLabel').value.trim() : item.label;
+      if (free && !label) { toast('What did you do?', 'error'); return; }
+      await api('POST', '/me/worklog', { category: item.category, label: label, quantity: needsQty ? ($('#qLogN').value || '') : '', unit: item.unit || null, note: $('#qLogNote').value.trim(), occurred_on: date });
+      closeModal(); toast('Logged ✓'); viewStaffLog(date);
+    };
+  }
+
+  // ---- worker app: leave ----
+  async function viewStaffLeave() {
+    const [kit, mine] = await Promise.all([getAppKit(), api('GET', '/me/leave')]);
+    const badge = (s) => s === 'approved' ? '<span class="badge badge-positive">Approved ✓</span>' : (s === 'declined' ? '<span class="badge badge-watchful">Not approved</span>' : '<span class="badge">Pending</span>');
+    const list = mine.length
+      ? '<div class="row-list">' + mine.map((l) => '<div class="row" style="cursor:default"><span class="ic-circle">🌴</span><span class="grow"><span class="t">' + esc(l.leave_type || 'Leave') + '</span><span class="s">' + esc(l.start_date) + (l.end_date && l.end_date !== l.start_date ? ' → ' + esc(l.end_date) : '') + (l.decision_note ? ' · ' + esc(l.decision_note) : '') + '</span></span><span class="meta">' + badge(l.status) + '</span></div>').join('') + '</div>'
+      : '<div class="muted">No leave requests yet.</div>';
+    staffLayout('<h1 style="font-size:1.6rem;margin-bottom:.1rem">Leave</h1><p class="muted">Request time off and see where it\'s at.</p><button class="btn btn-primary btn-block" id="reqLeave" style="margin-bottom:1.2rem">+ Request leave</button><div class="section-title"><h3>Your requests</h3></div>' + list, 'leave');
+    $('#reqLeave').onclick = () => openLeaveRequest(kit);
+  }
+  function openLeaveRequest(kit) {
+    const opts = (kit.leaveTypes || []).map((t) => '<option value="' + esc(t.label) + '">' + esc(t.label) + (t.paid ? '' : ' (unpaid)') + '</option>').join('');
+    openModal('<h2>Request leave</h2>' + (kit.leaveTip ? '<p class="muted">' + esc(kit.leaveTip) + '</p>' : '') +
+      '<div class="field"><label>Type</label><select id="lvType">' + opts + '</select></div>' +
+      '<div class="grid grid-2"><div class="field"><label>From</label><input type="date" id="lvFrom" value="' + todayStr() + '"></div><div class="field"><label>To</label><input type="date" id="lvTo" value="' + todayStr() + '"></div></div>' +
+      '<div class="field"><label>Note (optional)</label><textarea id="lvNote" rows="2" placeholder="Anything your manager should know"></textarea></div>' +
+      '<div class="modal-foot"><button class="btn btn-ghost" id="lvCancel">Cancel</button><button class="btn btn-primary" id="lvSave">Send request</button></div>');
+    $('#lvCancel').onclick = closeModal;
+    $('#lvSave').onclick = async () => { const from = $('#lvFrom').value; if (!from) { toast('Pick a start date', 'error'); return; } await api('POST', '/me/leave', { leave_type: $('#lvType').value, start_date: from, end_date: $('#lvTo').value || from, note: $('#lvNote').value.trim() }); closeModal(); toast('Request sent'); viewStaffLeave(); };
+  }
+
+  // ---- worker app: say something (suggestions) ----
+  async function viewStaffSay() {
+    const kit = await getAppKit();
+    const sg = kit.suggestions || { categories: [], intro: '', prompts: [] };
+    staffLayout('<h1 style="font-size:1.6rem;margin-bottom:.1rem">Say something</h1><p class="muted">' + esc(sg.intro || '') + '</p>' +
+      '<button class="btn btn-primary btn-block" id="newSuggest" style="margin:.4rem 0 1.4rem">💬 Send a suggestion</button>' +
+      '<div class="panel"><strong>Got a scheduled check-in?</strong><p class="muted" style="font-size:.9rem;margin:.2rem 0">Some check-ins are fully anonymous — a safe way to give honest feedback.</p><a href="#/" class="btn btn-ghost btn-sm">See your check-ins →</a></div>', 'say');
+    $('#newSuggest').onclick = () => openSuggest(sg);
+  }
+  function openSuggest(sg) {
+    const cats = (sg.categories || []).map((c) => '<option value="' + esc(c.label) + '">' + (c.icon || '') + ' ' + esc(c.label) + '</option>').join('');
+    openModal('<h2>Send a suggestion</h2>' +
+      '<div class="field"><label>What\'s it about?</label><select id="sgCat">' + cats + '</select></div>' +
+      '<div class="field"><label>Your idea or message</label><textarea id="sgBody" rows="4" placeholder="' + esc((sg.prompts && sg.prompts[0]) || 'What\'s on your mind?') + '"></textarea></div>' +
+      '<label class="check-item" style="margin-bottom:1rem"><input type="checkbox" id="sgAnon"><span><span class="ci-label">Send anonymously</span><br><span class="ci-help">Your name won\'t be attached.</span></span></label>' +
+      '<div class="modal-foot"><button class="btn btn-ghost" id="sgCancel">Cancel</button><button class="btn btn-primary" id="sgSave">Send</button></div>');
+    $('#sgCancel').onclick = closeModal;
+    $('#sgSave').onclick = async () => { const body = $('#sgBody').value.trim(); if (!body) { toast('Write something first', 'error'); return; } await api('POST', '/me/suggestions', { category: $('#sgCat').value, body: body, anonymous: $('#sgAnon').checked }); closeModal(); toast('Sent — cheers!'); };
+  }
+
+  // ---- worker app: training ----
+  async function viewStaffTraining() {
+    const t = await api('GET', '/me/training');
+    const w = t.wage;
+    let body = '<h1 style="font-size:1.6rem;margin-bottom:.1rem">Your training</h1><p class="muted">Where you\'re at and what you\'re signed off on.</p>';
+    if (w && w.currentRole) {
+      const cl = w.currentLevel;
+      const skills = (t.development || {}).skills || {};
+      const steps = w.currentRole.stepsToNext || [];
+      const done = steps.filter((s, i) => skills[w.currentRole.id + ':' + i]);
+      const todo = steps.filter((s, i) => !skills[w.currentRole.id + ':' + i]);
+      body += '<div class="panel"><div class="wizard-kind">You are</div><h2 style="margin:.1rem 0">' + esc(w.currentRole.title) + '</h2>' + (cl ? '<div class="muted">' + esc(cl.name) + (w.currentRole.awardLevel ? ' · ' + esc(w.currentRole.awardLevel) : '') + '</div>' : '') + '</div>';
+      if (done.length) body += '<div class="section-title" style="margin-top:1.4rem"><h3>✅ Signed off</h3></div><div class="checklist">' + done.map((s) => '<div class="check-item"><span>✅ <span class="ci-label">' + esc(s.label) + '</span>' + (s.type ? ' <span class="step-tag ' + s.type + '">' + esc(s.type) + '</span>' : '') + '</span></div>').join('') + '</div>';
+      if (w.nextRole && todo.length) body += '<div class="section-title" style="margin-top:1.4rem"><h3>🚀 Working towards ' + esc(w.nextRole.title) + '</h3></div><div class="checklist">' + todo.map((s) => '<div class="check-item"><span>⬜ <span class="ci-label">' + esc(s.label) + '</span>' + (s.type ? ' <span class="step-tag ' + s.type + '">' + esc(s.type) + '</span>' : '') + '</span></div>').join('') + '</div>';
+    } else {
+      body += '<div class="muted">Your training plan will show here once your manager sets up your role.</div>';
+    }
+    staffLayout(body, 'training');
   }
 
   // ---------------- router ----------------
@@ -1327,6 +1585,10 @@
       if (State.me.role === 'staff') {
         if (hash.indexOf('#/checkin/') === 0) return await viewStaffCheckin(hash.split('/')[2]);
         if (hash.indexOf('#/lesson/') === 0) return await viewStaffLesson(hash.split('/')[2]);
+        if (hash.indexOf('#/log') === 0) return await viewStaffLog();
+        if (hash.indexOf('#/leave') === 0) return await viewStaffLeave();
+        if (hash.indexOf('#/say') === 0) return await viewStaffSay();
+        if (hash.indexOf('#/training') === 0) return await viewStaffTraining();
         return await viewStaffHome();
       }
       if (hash.indexOf('#/case/') === 0) return await viewCase(hash.split('/')[2]);
@@ -1343,6 +1605,9 @@
       if (hash.indexOf('#/career') === 0) return await viewCareer();
       if (hash.indexOf('#/feedback/') === 0) return await viewFeedbackDetail(hash.split('/')[2]);
       if (hash.indexOf('#/feedback') === 0) return await viewFeedback();
+      if (hash.indexOf('#/productivity') === 0) return await viewProductivity();
+      if (hash.indexOf('#/leave') === 0) return await viewLeave();
+      if (hash.indexOf('#/suggestions') === 0) return await viewSuggestions();
       if (hash.indexOf('#/guide') === 0) return await viewGuide();
       return await viewDashboard();
     } catch (e) {

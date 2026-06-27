@@ -1,0 +1,14 @@
+{
+  "name": "Offsider",
+  "short_name": "Offsider",
+  "description": "Your right-hand for work — your plan, your training, logging your day, leave and more.",
+  "start_url": "/app",
+  "scope": "/app",
+  "display": "standalone",
+  "background_color": "#154a6b",
+  "theme_color": "#154a6b",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

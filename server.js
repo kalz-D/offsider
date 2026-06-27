@@ -21,6 +21,10 @@ const lifecycleRules = require('./content/lifecycleRules');
 const reflectionPrompts = require('./content/reflectionPrompts');
 const lessons = require('./content/lessons');
 const interviewKit = require('./content/interviewKit');
+const referenceKit = require('./content/referenceKit');
+const worklogKit = require('./content/worklogKit');
+const leaveTypes = require('./content/leaveTypes');
+const suggestionKit = require('./content/suggestionKit');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -273,12 +277,46 @@ app.post('/api/public/candidate/:token/accept', h(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// ---------- public REFERENCE check (referee fills this, no login) ----------
+app.get('/api/public/reference/:token', h(async (req, res) => {
+  const r = await db.prepare('SELECT * FROM candidate_references WHERE token = ?').get(req.params.token);
+  if (!r) return res.status(404).json({ error: 'This link is not valid.' });
+  const c = await db.prepare('SELECT name, role_applied FROM candidates WHERE id = ?').get(r.candidate_id);
+  const biz = (await db.prepare('SELECT name FROM businesses WHERE id = ?').get(r.business_id)) || {};
+  const data = { candidateName: c ? c.name : 'the candidate', roleTitle: c ? (c.role_applied || 'the role') : 'the role', businessName: biz.name || '' };
+  res.json({
+    businessName: biz.name || '', candidateName: c ? c.name : '', roleApplied: c ? c.role_applied : '', refereeName: r.referee_name || '',
+    submitted: r.status === 'received',
+    questions: (referenceKit.questions || []).map((q, i) => ({ id: 'r' + i, category: q.category, question: fillTemplate(q.question, data) }))
+  });
+}));
+app.post('/api/public/reference/:token', h(async (req, res) => {
+  const r = await db.prepare('SELECT * FROM candidate_references WHERE token = ?').get(req.params.token);
+  if (!r) return res.status(404).json({ error: 'This link is not valid.' });
+  const b = req.body || {};
+  if (!b.answers || typeof b.answers !== 'object') return res.status(400).json({ error: 'No answers were sent.' });
+  await db.prepare('UPDATE candidate_references SET answers=?, status=?, updated_at=? WHERE id=?').run(JSON.stringify(b.answers), 'received', now(), r.id);
+  res.json({ ok: true });
+}));
+
 // ---------- everything below requires a login ----------
 app.use('/api', requireAuth);
 
 // ---------- STAFF self-service ----------
 async function myEmployee(req) {
   return req.user.employee_id ? await db.prepare('SELECT * FROM employees WHERE id = ? AND business_id = ?').get(req.user.employee_id, req.business.id) : null;
+}
+async function notify(businessId, userId, kind, title, body, link) {
+  if (!userId) return;
+  await db.prepare('INSERT INTO notifications (id, business_id, user_id, kind, title, body, link, read, created_at) VALUES (?,?,?,?,?,?,?,0,?)').run(uid(), businessId, userId, kind, title || '', body || null, link || null, now());
+}
+async function notifyManagers(businessId, kind, title, body, link, exceptUserId) {
+  const mgrs = await db.prepare("SELECT id FROM users WHERE business_id = ? AND role IN ('owner','manager')").all(businessId);
+  for (const m of mgrs) { if (m.id !== exceptUserId) await notify(businessId, m.id, kind, title, body, link); }
+}
+async function userIdForEmployee(employeeId) {
+  const u = await db.prepare('SELECT id FROM users WHERE employee_id = ?').get(employeeId);
+  return u ? u.id : null;
 }
 app.get('/api/me', h(async (req, res) => {
   const e = await myEmployee(req);
@@ -349,6 +387,75 @@ app.post('/api/me/lessons/:lessonId/submit', h(async (req, res) => {
     signed = l.competencyLabel || l.signsOff;
   }
   res.json({ passed, correct, total, score, signed });
+}));
+
+// ---------- shared (any logged-in user): app kit + notifications ----------
+app.get('/api/app-kit', (req, res) => res.json({ worklog: worklogKit, leaveTypes: leaveTypes.types || [], leaveTip: leaveTypes.tip || '', suggestions: suggestionKit }));
+app.get('/api/notifications/mine', h(async (req, res) => {
+  const rows = await db.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY read ASC, created_at DESC LIMIT 50').all(req.user.id);
+  res.json(rows.map((n) => ({ id: n.id, kind: n.kind, title: n.title, body: n.body, link: n.link, read: !!n.read, created_at: n.created_at })));
+}));
+app.post('/api/notifications/read', h(async (req, res) => {
+  const id = (req.body || {}).id;
+  if (id) await db.prepare('UPDATE notifications SET read=1 WHERE id=? AND user_id=?').run(id, req.user.id);
+  else await db.prepare('UPDATE notifications SET read=1 WHERE user_id=?').run(req.user.id);
+  res.json({ ok: true });
+}));
+
+// ---------- STAFF worker-app: plans, work log, leave, suggestions, training ----------
+app.get('/api/me/plans', h(async (req, res) => {
+  const e = await myEmployee(req); if (!e) return res.json([]);
+  const since = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+  const rows = await db.prepare('SELECT * FROM plans WHERE employee_id = ? AND (plan_date IS NULL OR plan_date >= ?) ORDER BY plan_date DESC, created_at DESC').all(e.id, since);
+  res.json(rows.map((p) => ({ id: p.id, period: p.period, plan_date: p.plan_date, title: p.title, items: safeParse(p.items, []), note: p.note, created_at: p.created_at })));
+}));
+app.get('/api/me/worklog', h(async (req, res) => {
+  const e = await myEmployee(req); if (!e) return res.json({ date: today(), entries: [] });
+  const date = req.query.date || today();
+  const entries = await db.prepare('SELECT * FROM worklog WHERE employee_id = ? AND occurred_on = ? ORDER BY created_at DESC').all(e.id, date);
+  res.json({ date, entries });
+}));
+app.post('/api/me/worklog', h(async (req, res) => {
+  const e = await myEmployee(req); if (!e) return res.status(400).json({ error: 'No worker profile.' });
+  const b = req.body || {};
+  if (!b.label && !b.category && !b.note) return res.status(400).json({ error: 'Nothing to log.' });
+  const id = uid();
+  await db.prepare('INSERT INTO worklog (id, business_id, employee_id, occurred_on, category, label, quantity, unit, note, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+    .run(id, req.business.id, e.id, b.occurred_on || today(), b.category || null, b.label || null, (b.quantity != null && b.quantity !== '') ? Number(b.quantity) : null, b.unit || null, b.note || null, now());
+  res.json({ ok: true, id });
+}));
+app.delete('/api/me/worklog/:id', h(async (req, res) => {
+  const e = await myEmployee(req); if (!e) return res.status(400).json({ error: 'No worker profile.' });
+  await db.prepare('DELETE FROM worklog WHERE id = ? AND employee_id = ?').run(req.params.id, e.id);
+  res.json({ ok: true });
+}));
+app.get('/api/me/leave', h(async (req, res) => {
+  const e = await myEmployee(req); if (!e) return res.json([]);
+  res.json(await db.prepare('SELECT * FROM leave_requests WHERE employee_id = ? ORDER BY created_at DESC').all(e.id));
+}));
+app.post('/api/me/leave', h(async (req, res) => {
+  const e = await myEmployee(req); if (!e) return res.status(400).json({ error: 'No worker profile.' });
+  const b = req.body || {};
+  if (!b.start_date) return res.status(400).json({ error: 'A start date is needed.' });
+  const id = uid();
+  await db.prepare('INSERT INTO leave_requests (id, business_id, employee_id, leave_type, start_date, end_date, note, status, created_at) VALUES (?,?,?,?,?,?,?,?,?)')
+    .run(id, req.business.id, e.id, b.leave_type || null, b.start_date, b.end_date || b.start_date, b.note || null, 'pending', now());
+  await notifyManagers(req.business.id, 'leave', e.name + ' requested leave', (b.leave_type || 'Leave') + ' · ' + b.start_date + (b.end_date && b.end_date !== b.start_date ? ' to ' + b.end_date : ''), '#/leave', req.user.id);
+  res.json({ ok: true, id });
+}));
+app.post('/api/me/suggestions', h(async (req, res) => {
+  const e = await myEmployee(req); if (!e) return res.status(400).json({ error: 'No worker profile.' });
+  const b = req.body || {};
+  if (!b.body || !String(b.body).trim()) return res.status(400).json({ error: 'Write something first.' });
+  const anon = b.anonymous ? 1 : 0;
+  await db.prepare('INSERT INTO suggestions (id, business_id, employee_id, anonymous, category, body, status, created_at) VALUES (?,?,?,?,?,?,?,?)')
+    .run(uid(), req.business.id, anon ? null : e.id, anon, b.category || null, String(b.body).trim(), 'new', now());
+  await notifyManagers(req.business.id, 'suggestion', (anon ? 'A team member' : e.name) + ' sent a suggestion', (b.category ? '[' + b.category + '] ' : '') + String(b.body).trim().slice(0, 90), '#/suggestions', null);
+  res.json({ ok: true });
+}));
+app.get('/api/me/training', h(async (req, res) => {
+  const e = await myEmployee(req); if (!e) return res.json({ wage: null, development: {} });
+  res.json({ name: e.name, job_title: e.job_title, classification: e.classification, wage: buildWageView(e, req.business), development: safeParse(e.development, {}) });
 }));
 
 // ---------- everything below is MANAGERS ONLY ----------
@@ -781,11 +888,95 @@ app.post('/api/candidates/:id/hire', h(async (req, res) => {
   res.json({ employee_id: empId });
 }));
 
+// ---------- worker-app management: plans, productivity, leave, suggestions ----------
+app.post('/api/employees/:id/plans', h(async (req, res) => {
+  const e = await db.prepare('SELECT * FROM employees WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!e) return res.status(404).json({ error: 'Not found' });
+  const b = req.body || {};
+  const id = uid();
+  await db.prepare('INSERT INTO plans (id, business_id, employee_id, period, plan_date, title, items, note, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+    .run(id, req.business.id, e.id, b.period || 'day', b.plan_date || today(), b.title || null, JSON.stringify(b.items || []), b.note || null, req.user.id, now());
+  await notify(req.business.id, await userIdForEmployee(e.id), 'plan', 'New ' + (b.period === 'week' ? 'weekly' : 'daily') + ' plan', b.title || 'Your plan is ready', '#/');
+  res.json({ ok: true, id });
+}));
+app.get('/api/employees/:id/plans', h(async (req, res) => {
+  const e = await db.prepare('SELECT id FROM employees WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!e) return res.status(404).json({ error: 'Not found' });
+  const rows = await db.prepare('SELECT * FROM plans WHERE employee_id=? ORDER BY plan_date DESC, created_at DESC LIMIT 30').all(e.id);
+  res.json(rows.map((p) => ({ id: p.id, period: p.period, plan_date: p.plan_date, title: p.title, items: safeParse(p.items, []), note: p.note, created_at: p.created_at })));
+}));
+app.get('/api/employees/:id/worklog', h(async (req, res) => {
+  const e = await db.prepare('SELECT id FROM employees WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!e) return res.status(404).json({ error: 'Not found' });
+  const from = req.query.from || new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+  const to = req.query.to || today();
+  res.json(await db.prepare('SELECT * FROM worklog WHERE employee_id=? AND occurred_on >= ? AND occurred_on <= ? ORDER BY occurred_on DESC, created_at DESC').all(e.id, from, to));
+}));
+app.get('/api/productivity', h(async (req, res) => {
+  const days = Math.min(parseInt(req.query.days || '7', 10) || 7, 60);
+  const from = new Date(Date.now() - (days - 1) * 86400000).toISOString().slice(0, 10);
+  const rows = await db.prepare('SELECT w.employee_id, e.name AS name, w.occurred_on, w.category, w.quantity FROM worklog w JOIN employees e ON e.id = w.employee_id WHERE w.business_id = ? AND w.occurred_on >= ?').all(req.business.id, from);
+  const byWorker = {};
+  for (const r of rows) {
+    const w = byWorker[r.employee_id] || (byWorker[r.employee_id] = { employee_id: r.employee_id, name: r.name, entries: 0, days: {}, byCategory: {} });
+    w.entries++; w.days[r.occurred_on] = 1;
+    const c = r.category || 'other'; w.byCategory[c] = (w.byCategory[c] || 0) + 1;
+  }
+  const workers = Object.keys(byWorker).map((k) => { const w = byWorker[k]; return { employee_id: w.employee_id, name: w.name, entries: w.entries, activeDays: Object.keys(w.days).length, byCategory: w.byCategory }; }).sort((a, b) => b.entries - a.entries);
+  res.json({ from, days, workers });
+}));
+app.get('/api/leave', h(async (req, res) => {
+  res.json(await db.prepare("SELECT l.*, e.name AS employee_name FROM leave_requests l JOIN employees e ON e.id = l.employee_id WHERE l.business_id = ? ORDER BY (l.status = 'pending') DESC, l.created_at DESC").all(req.business.id));
+}));
+app.post('/api/leave/:id/decide', h(async (req, res) => {
+  const l = await db.prepare('SELECT * FROM leave_requests WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!l) return res.status(404).json({ error: 'Not found' });
+  const status = (req.body || {}).status === 'approved' ? 'approved' : 'declined';
+  await db.prepare('UPDATE leave_requests SET status=?, decided_by=?, decided_at=?, decision_note=? WHERE id=?').run(status, req.user.id, now(), (req.body || {}).decision_note || null, l.id);
+  await notify(req.business.id, await userIdForEmployee(l.employee_id), 'leave', 'Leave ' + status, (l.leave_type || 'Leave') + ' · ' + l.start_date + (status === 'approved' ? ' — approved ✓' : ' — not approved'), '#/leave');
+  res.json({ ok: true });
+}));
+app.get('/api/suggestions', h(async (req, res) => {
+  const rows = await db.prepare("SELECT s.*, e.name AS employee_name FROM suggestions s LEFT JOIN employees e ON e.id = s.employee_id WHERE s.business_id = ? ORDER BY (s.status = 'new') DESC, s.created_at DESC").all(req.business.id);
+  res.json(rows.map((s) => ({ id: s.id, category: s.category, body: s.body, status: s.status, anonymous: !!s.anonymous, employee_name: s.anonymous ? null : s.employee_name, created_at: s.created_at })));
+}));
+app.post('/api/suggestions/:id/status', h(async (req, res) => {
+  await db.prepare('UPDATE suggestions SET status=? WHERE id=? AND business_id=?').run((req.body || {}).status || 'seen', req.params.id, req.business.id);
+  res.json({ ok: true });
+}));
+
+// ---------- references (recruitment) ----------
+app.get('/api/reference-kit', (req, res) => res.json(referenceKit));
+app.get('/api/candidates/:id/references', h(async (req, res) => {
+  const c = await db.prepare('SELECT id FROM candidates WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  const rows = await db.prepare('SELECT * FROM candidate_references WHERE candidate_id=? ORDER BY created_at').all(c.id);
+  res.json(rows.map((r) => ({ id: r.id, referee_name: r.referee_name, relationship: r.relationship, company: r.company, phone: r.phone, email: r.email, token: r.token, status: r.status, answers: safeParse(r.answers, null), notes: r.notes })));
+}));
+app.post('/api/candidates/:id/references', h(async (req, res) => {
+  const c = await db.prepare('SELECT id FROM candidates WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  const b = req.body || {};
+  const id = uid(); const token = newToken();
+  await db.prepare('INSERT INTO candidate_references (id, business_id, candidate_id, referee_name, relationship, company, phone, email, token, status, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
+    .run(id, req.business.id, c.id, b.referee_name || null, b.relationship || null, b.company || null, b.phone || null, b.email || null, token, 'pending', req.user.id, now(), now());
+  res.json({ ok: true, id, token });
+}));
+app.patch('/api/references/:id', h(async (req, res) => {
+  const r = await db.prepare('SELECT * FROM candidate_references WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!r) return res.status(404).json({ error: 'Not found' });
+  const b = req.body || {};
+  await db.prepare('UPDATE candidate_references SET answers=?, notes=?, status=?, updated_at=? WHERE id=?')
+    .run(b.answers != null ? JSON.stringify(b.answers) : r.answers, b.notes != null ? b.notes : r.notes, b.status || r.status, now(), r.id);
+  res.json({ ok: true });
+}));
+
 // ---------- page routes ----------
 app.get('/', (req, res) => res.sendFile(path.join(PUBLIC, 'index.html')));
 app.get(/^\/app(\/.*)?$/, (req, res) => res.sendFile(path.join(PUBLIC, 'app.html')));
 app.get('/f/:token', (req, res) => res.sendFile(path.join(PUBLIC, 'feedback.html')));
 app.get('/c/:token', (req, res) => res.sendFile(path.join(PUBLIC, 'candidate.html')));
+app.get('/r/:token', (req, res) => res.sendFile(path.join(PUBLIC, 'reference.html')));
 app.use(express.static(PUBLIC));
 
 // ---------- startup ----------

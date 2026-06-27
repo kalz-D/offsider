@@ -112,6 +112,33 @@ const SCHEMA_SQL = `
     application TEXT, interview TEXT, offer TEXT, hired_employee_id TEXT,
     created_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS candidate_references (
+    id TEXT PRIMARY KEY, business_id TEXT NOT NULL, candidate_id TEXT NOT NULL,
+    referee_name TEXT, relationship TEXT, company TEXT, phone TEXT, email TEXT,
+    token TEXT UNIQUE, status TEXT DEFAULT 'pending', answers TEXT, notes TEXT,
+    created_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS plans (
+    id TEXT PRIMARY KEY, business_id TEXT NOT NULL, employee_id TEXT NOT NULL, period TEXT DEFAULT 'day',
+    plan_date TEXT, title TEXT, items TEXT, note TEXT, created_by TEXT, created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS worklog (
+    id TEXT PRIMARY KEY, business_id TEXT NOT NULL, employee_id TEXT NOT NULL, occurred_on TEXT NOT NULL,
+    category TEXT, label TEXT, quantity REAL, unit TEXT, note TEXT, created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS leave_requests (
+    id TEXT PRIMARY KEY, business_id TEXT NOT NULL, employee_id TEXT NOT NULL, leave_type TEXT,
+    start_date TEXT, end_date TEXT, note TEXT, status TEXT DEFAULT 'pending',
+    decided_by TEXT, decided_at TEXT, decision_note TEXT, created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS suggestions (
+    id TEXT PRIMARY KEY, business_id TEXT NOT NULL, employee_id TEXT, anonymous INTEGER DEFAULT 0,
+    category TEXT, body TEXT NOT NULL, status TEXT DEFAULT 'new', created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS notifications (
+    id TEXT PRIMARY KEY, business_id TEXT NOT NULL, user_id TEXT NOT NULL, kind TEXT,
+    title TEXT, body TEXT, link TEXT, read INTEGER DEFAULT 0, created_at TEXT NOT NULL
+  );
   CREATE INDEX IF NOT EXISTS idx_users_business ON users(business_id);
   CREATE INDEX IF NOT EXISTS idx_emp_business   ON employees(business_id);
   CREATE INDEX IF NOT EXISTS idx_cases_business ON cases(business_id);
@@ -123,6 +150,12 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_notes_emp      ON notes(employee_id);
   CREATE INDEX IF NOT EXISTS idx_lessons_emp    ON lessons_progress(employee_id);
   CREATE INDEX IF NOT EXISTS idx_candidates_biz ON candidates(business_id);
+  CREATE INDEX IF NOT EXISTS idx_refs_candidate ON candidate_references(candidate_id);
+  CREATE INDEX IF NOT EXISTS idx_plans_emp      ON plans(employee_id);
+  CREATE INDEX IF NOT EXISTS idx_worklog_emp    ON worklog(employee_id);
+  CREATE INDEX IF NOT EXISTS idx_leave_biz      ON leave_requests(business_id);
+  CREATE INDEX IF NOT EXISTS idx_suggest_biz    ON suggestions(business_id);
+  CREATE INDEX IF NOT EXISTS idx_notif_user     ON notifications(user_id);
 `;
 
 async function init() {
