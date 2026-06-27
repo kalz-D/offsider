@@ -21,3 +21,8 @@ build-*.js
 .claude/
 npm-debug.log*
 *.log
+
+# test cookie jars
+mj.txt
+sj.txt
+cj.txt
