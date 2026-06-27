@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+
+# local database + data (never commit your data)
+offsider.db
+offsider.db-wal
+offsider.db-shm
+*.db
+*.db-wal
+*.db-shm
+
+# env + secrets
+.env
+.env.local
+
+# one-off content build scripts (generated content already lives in content/)
+build-*.js
+
+# editor / OS / local tooling
+.DS_Store
+.claude/
+npm-debug.log*
+*.log

@@ -1,0 +1,26 @@
+# Render Blueprint — deploys the whole Offsider app (marketing site + app + API) as one service.
+#
+# Free tier note: on the free plan the SQLite database is EPHEMERAL — it resets to the
+# Qualtest demo on each deploy and after the service sleeps. That's fine for showing it off.
+# To keep real data, change `plan: free` to `plan: starter` and uncomment the disk + DB_PATH
+# block below (a 1 GB persistent disk is plenty).
+services:
+  - type: web
+    name: offsider
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SESSION_SECRET
+        generateValue: true
+    # ---- persist real data (paid plan) ----
+    #   - key: DB_PATH
+    #     value: /data/offsider.db
+    # disk:
+    #   name: offsider-data
+    #   mountPath: /data
+    #   sizeGB: 1
