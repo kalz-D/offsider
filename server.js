@@ -428,6 +428,35 @@ app.post('/api/employees/:id/reflection', h(async (req, res) => {
   res.json({ ok: true, notes: saved });
 }));
 
+// onboarding overview — new starters + their progress
+app.get('/api/onboarding', h(async (req, res) => {
+  const bid = req.business.id;
+  const emps = await db.prepare("SELECT * FROM employees WHERE business_id = ? AND status = 'active'").all(bid);
+  const t = today();
+  const out = [];
+  for (const e of emps) {
+    const tenure = e.start_date ? diffDays(t, e.start_date) : null;
+    const onbCase = await db.prepare("SELECT id, status FROM cases WHERE employee_id = ? AND flow_id = 'onboarding' ORDER BY created_at DESC LIMIT 1").get(e.id);
+    const isNew = (tenure != null && tenure <= 90) || (onbCase && onbCase.status !== 'resolved');
+    if (!isNew) continue;
+    const onbRules = lifecycleRules.filter((r) => (r.stage === 'onboarding' || r.stage === 'probation') && r.trigger && r.trigger.type === 'after_start' && ruleApplies(r, e, tenure));
+    const comps = await db.prepare("SELECT rule_id, occurrence_key FROM lifecycle_completions WHERE employee_id = ? AND status = 'done'").all(e.id);
+    const doneSet = new Set(comps.map((c) => c.rule_id + '|' + c.occurrence_key));
+    let doneCount = 0;
+    for (const r of onbRules) { if (doneSet.has(r.id + '|d' + (r.trigger.days || 0))) doneCount++; }
+    const sched = await lifecycleSchedule(e);
+    const nextOnb = sched.filter((m) => (m.stage === 'onboarding' || m.stage === 'probation') && !m.done).sort((a, b) => a.daysUntil - b.daysUntil)[0] || null;
+    out.push({
+      id: e.id, name: e.name, job_title: e.job_title, starter_profile: e.starter_profile, start_date: e.start_date, tenure,
+      progress: { done: doneCount, total: onbRules.length },
+      next: nextOnb ? { title: nextOnb.title, daysUntil: nextOnb.daysUntil, owner: nextOnb.owner } : null,
+      case_id: onbCase ? onbCase.id : null
+    });
+  }
+  out.sort((a, b) => (a.tenure == null ? 9999 : a.tenure) - (b.tenure == null ? 9999 : b.tenure));
+  res.json(out);
+}));
+
 // worker-attached document
 app.post('/api/employees/:id/documents', h(async (req, res) => {
   const e = await db.prepare('SELECT * FROM employees WHERE id = ? AND business_id = ?').get(req.params.id, req.business.id);

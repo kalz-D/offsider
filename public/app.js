@@ -111,6 +111,7 @@
       item('new', '#/new', '✨', 'Start something') +
       '<div class="nav-group-label">Manage</div>' +
       item('team', '#/team', '👷', 'Workers') +
+      item('onboarding', '#/onboarding', '👋', 'Onboarding') +
       item('cases', '#/cases', '🗂️', 'Cases') +
       item('docs', '#/documents', '📄', 'Documents') +
       '<div class="nav-group-label">Develop</div>' +
@@ -688,6 +689,35 @@
   function momentPrimary(m) { const a = m.action || {}; if (a.kind === 'reflection') return '🧠 Reflect'; if (a.feedbackTemplateId) return 'Send check-in'; if (a.flowId) return 'Start →'; return 'Log it'; }
 
   // ---------------- workers ----------------
+  async function viewOnboarding() {
+    const [starters, cfg] = await Promise.all([api('GET', '/onboarding'), getConfig()]);
+    const spLabel = {}; (cfg.starterProfiles || []).forEach((p) => { spLabel[p.id] = p; });
+    const card = (s) => {
+      const pct = s.progress.total ? Math.round((s.progress.done / s.progress.total) * 100) : 0;
+      const sp = spLabel[s.starter_profile];
+      const next = s.next;
+      const nextHtml = next
+        ? '<div class="muted" style="font-size:.86rem;margin-top:.5rem">Next: <strong>' + esc(next.title) + '</strong> · ' + (next.daysUntil < 0 ? '<span style="color:var(--danger)">' + relativeDue(next.daysUntil) + '</span>' : relativeDue(next.daysUntil)) + (next.owner && next.owner !== 'manager' ? ' · ' + ownerLabel(next.owner) : '') + '</div>'
+        : '<div class="muted" style="font-size:.86rem;margin-top:.5rem">All onboarding steps done 🎉</div>';
+      return '<a href="#/member/' + s.id + '" class="card card-pad onb-card">' +
+        '<div style="display:flex;gap:1rem;align-items:center">' +
+        '<span class="ic-circle" style="width:48px;height:48px;font-size:1.4rem;background:var(--positive-50)">👋</span>' +
+        '<div class="grow"><div style="font-family:var(--font-head);font-weight:800;font-size:1.1rem">' + esc(s.name) + '</div>' +
+        '<div class="muted" style="font-size:.86rem">' + esc(s.job_title || '') + (s.tenure != null ? ' · day ' + s.tenure : '') + (sp ? ' · 🌱 ' + esc(sp.label) : '') + '</div></div>' +
+        '<div style="text-align:right;min-width:84px"><div style="font-family:var(--font-head);font-weight:800;font-size:1.3rem;color:var(--positive-700)">' + pct + '%</div><div class="muted" style="font-size:.72rem">' + s.progress.done + '/' + s.progress.total + ' steps</div></div>' +
+        '</div>' +
+        '<div class="progress" style="margin-top:.7rem"><div class="progress-bar ' + (pct < 34 ? 'low' : '') + '" style="width:' + Math.max(pct, 3) + '%"></div></div>' +
+        nextHtml + '</a>';
+    };
+    const body = starters.length
+      ? '<div class="section-title"><h3>Currently onboarding (' + starters.length + ')</h3><button class="btn btn-primary btn-sm" id="addStarter">+ Onboard a new starter</button></div>' +
+        '<p class="muted" style="max-width:64ch;margin-top:-.3rem">Everyone in their first few months. Tap a starter to open their full onboarding plan and tick off the steps.</p>' +
+        starters.map(card).join('')
+      : '<div class="empty"><span class="ic">👋</span>No one\'s being onboarded right now.<br>When you add a new worker, their onboarding plan kicks off automatically.<br><button class="btn btn-primary" style="margin-top:1.2rem" id="addStarter">+ Onboard a new starter</button></div>';
+    layout('onboarding', 'Onboarding', body);
+    const a = $('#addStarter'); if (a) a.onclick = openWorkerModal;
+  }
+
   async function viewTeam() {
     const employees = await api('GET', '/employees');
     const content =
@@ -1083,6 +1113,7 @@
       if (hash.indexOf('#/document/') === 0) return await viewDocument(hash.split('/')[2]);
       if (hash.indexOf('#/new') === 0) return await viewNewCase();
       if (hash.indexOf('#/cases') === 0) return await viewCases();
+      if (hash.indexOf('#/onboarding') === 0) return await viewOnboarding();
       if (hash.indexOf('#/team') === 0) return await viewTeam();
       if (hash.indexOf('#/documents') === 0) return await viewDocuments();
       if (hash.indexOf('#/career') === 0) return await viewCareer();
