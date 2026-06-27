@@ -689,6 +689,44 @@
   function momentPrimary(m) { const a = m.action || {}; if (a.kind === 'reflection') return '🧠 Reflect'; if (a.feedbackTemplateId) return 'Send check-in'; if (a.flowId) return 'Start →'; return 'Log it'; }
 
   // ---------------- workers ----------------
+  async function viewTrainingRecord(id) {
+    const e = await api('GET', '/employees/' + id);
+    const dev = e.development || {}; const skills = dev.skills || {}; const goals = (dev.goals || []).filter((g) => !g.done);
+    const packId = e.pathway_id || State.me.business.industry_id || null;
+    let pack = null; if (packId) { try { pack = await api('GET', '/industries/' + packId); } catch (x) { pack = null; } }
+    const roles = pack ? (pack.pathway.roles || []).slice().sort((a, b) => a.level - b.level) : [];
+    const currentRole = roles.find((r) => r.id === e.current_role);
+    const w = e.wage; const cl = w && w.currentLevel;
+    // every ladder step the manager has signed off
+    const signed = [];
+    roles.forEach((r) => (r.stepsToNext || []).forEach((s, i) => { if (skills[r.id + ':' + i]) signed.push({ label: s.label, type: s.type || 'skill', detail: s.detail || '' }); }));
+    const recordDate = new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric' });
+    const group = (title, type) => { const items = signed.filter((s) => s.type === type); return items.length ? '<div style="margin-top:1.1rem"><strong>' + title + '</strong><ul style="margin:.35rem 0 0;padding-left:1.2rem;line-height:1.7">' + items.map((s) => '<li>' + esc(s.label) + (s.detail ? ' <span style="color:#777">— ' + esc(s.detail) + '</span>' : '') + '</li>').join('') + '</ul></div>' : ''; };
+    const row = (k, v) => v ? '<tr><td style="padding:.25rem 0;width:42%;vertical-align:top"><strong>' + k + '</strong></td><td style="padding:.25rem 0">' + v + '</td></tr>' : '';
+    const content =
+      '<div class="doc-toolbar"><a href="#/member/' + e.id + '" class="btn btn-ghost btn-sm">← Back to worker</a><button class="btn btn-primary btn-sm" onclick="window.print()">🖨️ Print / Save as PDF</button></div>' +
+      '<div class="doc-paper">' +
+      '<div style="text-align:center;margin-bottom:1.4rem"><div style="font-family:var(--font-head);font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#555">' + esc(State.me.business.name) + '</div><h2 style="margin:.3rem 0 0;font-size:1.7rem">Training Record</h2></div>' +
+      '<table style="width:100%;border-collapse:collapse">' +
+      row('Name', esc(e.name)) +
+      row('Role', esc(e.job_title || (currentRole ? currentRole.title : '') || '—')) +
+      row('Award classification', cl ? (esc(cl.name) + (w.award ? ' · ' + esc(w.award.code) : '')) : '') +
+      row('Started', e.start_date ? fmtDate(e.start_date) : '') +
+      row('Record date', recordDate) +
+      '</table>' +
+      '<hr style="border:none;border-top:1px solid #ddd;margin:1.2rem 0">' +
+      (signed.length
+        ? '<h3 style="margin:0">Competencies signed off (' + signed.length + ')</h3>' +
+          group('🎫 Tickets &amp; licences', 'ticket') + group('🔧 Skills &amp; test methods', 'skill') + group('📋 Experience', 'experience') + group('⭐ Attributes', 'behaviour')
+        : '<p style="color:#777">No competencies signed off in Offsider yet.</p>') +
+      (goals.length ? '<div style="margin-top:1.4rem"><h3 style="margin:0 0 .3rem">Currently working towards</h3><ul style="margin:0;padding-left:1.2rem;line-height:1.7">' + goals.map((g) => '<li>' + esc(g.title) + (g.target ? ' <span style="color:#777">(target ' + fmtDate(g.target) + ')</span>' : '') + '</li>').join('') + '</ul></div>' : '') +
+      '<hr style="border:none;border-top:1px solid #ddd;margin:1.4rem 0">' +
+      '<div style="color:#444;font-size:.88rem">Recorded by ' + esc(State.me.name) + ', ' + esc(State.me.business.name) + ', as at ' + recordDate + '. Reflects competencies signed off in Offsider. This is the worker&rsquo;s record to keep and take with them.</div>' +
+      '<div style="margin-top:2.2rem;display:flex;gap:3rem"><div style="flex:1;border-top:1px solid #333;padding-top:.3rem;font-size:.82rem;color:#555">Manager signature &amp; date</div><div style="flex:1;border-top:1px solid #333;padding-top:.3rem;font-size:.82rem;color:#555">Worker signature &amp; date</div></div>' +
+      '</div>';
+    layout('team', 'Training record — ' + e.name, content, '<a href="#/team">Workers</a> / <a href="#/member/' + e.id + '">' + esc(e.name) + '</a>');
+  }
+
   async function viewOnboarding() {
     const [starters, cfg] = await Promise.all([api('GET', '/onboarding'), getConfig()]);
     const spLabel = {}; (cfg.starterProfiles || []).forEach((p) => { spLabel[p.id] = p; });
@@ -791,6 +829,7 @@
       (e.hasLogin ? '<span class="badge badge-positive">✓ Has staff login</span>' : '<button class="btn btn-ghost btn-sm" id="giveLogin">Give a staff login</button>') +
       (canOnboard ? ' <button class="btn btn-ghost btn-sm" id="startOnb">👋 Onboarding</button>' : '') +
       ' <button class="btn btn-ghost btn-sm" id="reflectBtn">🧠 Reflect</button>' +
+      ' <a href="#/training/' + e.id + '" class="btn btn-ghost btn-sm">📜 Training record</a>' +
       ' <button class="btn btn-ghost btn-sm" id="quickNoteHere">✎ Quick note</button>' +
       ' <a href="#/new" class="btn btn-primary btn-sm">Start something</a></div>';
 
@@ -1109,6 +1148,7 @@
         return await viewStaffHome();
       }
       if (hash.indexOf('#/case/') === 0) return await viewCase(hash.split('/')[2]);
+      if (hash.indexOf('#/training/') === 0) return await viewTrainingRecord(hash.split('/')[2]);
       if (hash.indexOf('#/member/') === 0) return await viewMember(hash.split('/')[2]);
       if (hash.indexOf('#/document/') === 0) return await viewDocument(hash.split('/')[2]);
       if (hash.indexOf('#/new') === 0) return await viewNewCase();
