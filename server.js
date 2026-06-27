@@ -20,6 +20,7 @@ const impactTags = require('./content/impactTags');
 const lifecycleRules = require('./content/lifecycleRules');
 const reflectionPrompts = require('./content/reflectionPrompts');
 const lessons = require('./content/lessons');
+const interviewKit = require('./content/interviewKit');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -236,6 +237,39 @@ app.post('/api/public/feedback/:token', h(async (req, res) => {
   const { answers, submitted_by } = req.body || {};
   if (!answers || typeof answers !== 'object') return res.status(400).json({ error: 'No answers were sent.' });
   await db.prepare('INSERT INTO feedback_responses (id, request_id, business_id, answers, anonymous, submitted_by, submitted_at) VALUES (?,?,?,?,?,?,?)').run(uid(), fr.id, fr.business_id, JSON.stringify(answers), fr.anonymous ? 1 : 0, (fr.anonymous ? null : (submitted_by || null)), now());
+  res.json({ ok: true });
+}));
+
+// ---------- public CANDIDATE page (pre-interview application form + offer accept) ----------
+app.get('/api/public/candidate/:token', h(async (req, res) => {
+  const c = await db.prepare('SELECT * FROM candidates WHERE token = ?').get(req.params.token);
+  if (!c) return res.status(404).json({ error: 'This link is not valid.' });
+  const biz = (await db.prepare('SELECT name FROM businesses WHERE id = ?').get(c.business_id)) || {};
+  const offer = safeParse(c.offer, null);
+  let stage = 'done';
+  if (c.status === 'offer' && offer) stage = 'offer';
+  else if (!c.application && (c.status === 'new' || c.status === 'applied')) stage = 'application';
+  res.json({
+    businessName: biz.name || '', candidateName: c.name, roleApplied: c.role_applied || '', stage,
+    applicationFields: stage === 'application' ? interviewKit.applicationFields : [],
+    offer: stage === 'offer' ? { roleTitle: c.role_applied || '', rate: offer.rate, pay_basis: offer.pay_basis, start_date: offer.start_date, message: offer.message } : null,
+    accepted: c.status === 'accepted' || c.status === 'hired'
+  });
+}));
+app.post('/api/public/candidate/:token/apply', h(async (req, res) => {
+  const c = await db.prepare('SELECT * FROM candidates WHERE token = ?').get(req.params.token);
+  if (!c) return res.status(404).json({ error: 'This link is not valid.' });
+  const { answers, phone } = req.body || {};
+  if (!answers || typeof answers !== 'object') return res.status(400).json({ error: 'No answers were sent.' });
+  await db.prepare('UPDATE candidates SET application=?, phone=COALESCE(?,phone), status=?, updated_at=? WHERE id=?')
+    .run(JSON.stringify(answers), phone || null, (c.status === 'new' ? 'applied' : c.status), now(), c.id);
+  res.json({ ok: true });
+}));
+app.post('/api/public/candidate/:token/accept', h(async (req, res) => {
+  const c = await db.prepare('SELECT * FROM candidates WHERE token = ?').get(req.params.token);
+  if (!c) return res.status(404).json({ error: 'This link is not valid.' });
+  if (c.status !== 'offer') return res.status(400).json({ error: 'There is no offer to accept right now.' });
+  await db.prepare('UPDATE candidates SET status=?, updated_at=? WHERE id=?').run('accepted', now(), c.id);
   res.json({ ok: true });
 }));
 
@@ -688,10 +722,70 @@ app.get('/api/dashboard', h(async (req, res) => {
   });
 }));
 
+// ---------- RECRUITMENT (candidates) — managers only ----------
+app.get('/api/interview-kit', (req, res) => res.json(interviewKit));
+app.get('/api/candidates', h(async (req, res) => {
+  res.json(await db.prepare('SELECT id, name, email, phone, role_applied, status, created_at, updated_at FROM candidates WHERE business_id = ? ORDER BY updated_at DESC').all(req.business.id));
+}));
+app.post('/api/candidates', h(async (req, res) => {
+  const { name, email, phone, role_applied } = req.body || {};
+  if (!name || !String(name).trim()) return res.status(400).json({ error: 'A name is needed.' });
+  const id = uid(); const token = newToken();
+  await db.prepare('INSERT INTO candidates (id, business_id, name, email, phone, role_applied, status, token, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+    .run(id, req.business.id, String(name).trim(), email || null, phone || null, role_applied || null, 'new', token, req.user.id, now(), now());
+  res.json({ id, token });
+}));
+app.get('/api/candidates/:id', h(async (req, res) => {
+  const c = await db.prepare('SELECT * FROM candidates WHERE id = ? AND business_id = ?').get(req.params.id, req.business.id);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  res.json({ ...c, application: safeParse(c.application, null), interview: safeParse(c.interview, null), offer: safeParse(c.offer, null) });
+}));
+app.patch('/api/candidates/:id', h(async (req, res) => {
+  const c = await db.prepare('SELECT * FROM candidates WHERE id = ? AND business_id = ?').get(req.params.id, req.business.id);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  const b = req.body || {};
+  const pick = (k, col) => (b[k] != null ? b[k] : c[col != null ? col : k]);
+  await db.prepare('UPDATE candidates SET name=?, email=?, phone=?, role_applied=?, status=?, resume_text=?, interview=?, updated_at=? WHERE id=?')
+    .run(pick('name'), pick('email'), pick('phone'), pick('role_applied'), pick('status'), pick('resume_text'), b.interview != null ? JSON.stringify(b.interview) : c.interview, now(), c.id);
+  res.json({ ok: true });
+}));
+app.post('/api/candidates/:id/offer', h(async (req, res) => {
+  const c = await db.prepare('SELECT * FROM candidates WHERE id = ? AND business_id = ?').get(req.params.id, req.business.id);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  const { rate, pay_basis, start_date, employment_type, message } = req.body || {};
+  const offer = { rate: rate || '', pay_basis: pay_basis || 'hour', start_date: start_date || '', employment_type: employment_type || 'Full time', message: message || '', sent_at: now() };
+  await db.prepare('UPDATE candidates SET offer=?, status=?, updated_at=? WHERE id=?').run(JSON.stringify(offer), 'offer', now(), c.id);
+  const basis = pay_basis === 'year' ? 'year' : pay_basis === 'week' ? 'week' : 'hour';
+  const rateStr = rate ? ('$' + rate + '/' + basis) : 'as discussed';
+  const data = { candidateName: c.name, roleTitle: c.role_applied || 'the role', businessName: req.business.name, rate: rateStr, startDate: start_date || 'to be confirmed', managerName: req.user.name, date: today(), message: message || '' };
+  const ol = interviewKit.offerLetter || { subject: '', body: '' };
+  res.json({ subject: fillTemplate(ol.subject, data), body: fillTemplate(ol.body, data), acceptPath: '/c/' + c.token });
+}));
+app.post('/api/candidates/:id/hire', h(async (req, res) => {
+  const c = await db.prepare('SELECT * FROM candidates WHERE id = ? AND business_id = ?').get(req.params.id, req.business.id);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  if (c.hired_employee_id) return res.json({ employee_id: c.hired_employee_id, already: true });
+  const offer = safeParse(c.offer, {});
+  const empId = uid();
+  await db.prepare('INSERT INTO employees (id, business_id, name, job_title, employment_type, start_date, status, pathway_id, pay_rate, pay_basis, starter_profile, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+    .run(empId, req.business.id, c.name, c.role_applied || null, offer.employment_type || 'Full time', offer.start_date || today(), 'active', req.business.industry_id || null, offer.rate ? (Number(offer.rate) || null) : null, offer.pay_basis || 'hour', 'new_to_industry', now());
+  const flow = flowById('onboarding');
+  if (flow) {
+    const cid = uid();
+    await db.prepare('INSERT INTO cases (id, business_id, employee_id, flow_id, title, sentiment, status, current_node, state, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(cid, req.business.id, empId, 'onboarding', 'Onboarding — ' + c.name, 'positive', 'open', flow.startNode, '{}', req.user.id, now(), now());
+    await db.prepare('INSERT INTO events (id, case_id, business_id, kind, summary, occurred_at, created_by, created_at) VALUES (?,?,?,?,?,?,?,?)')
+      .run(uid(), cid, req.business.id, 'system', 'Hired through recruitment — onboarding started', today(), req.user.id, now());
+  }
+  await db.prepare('UPDATE candidates SET status=?, hired_employee_id=?, updated_at=? WHERE id=?').run('hired', empId, now(), c.id);
+  res.json({ employee_id: empId });
+}));
+
 // ---------- page routes ----------
 app.get('/', (req, res) => res.sendFile(path.join(PUBLIC, 'index.html')));
 app.get(/^\/app(\/.*)?$/, (req, res) => res.sendFile(path.join(PUBLIC, 'app.html')));
 app.get('/f/:token', (req, res) => res.sendFile(path.join(PUBLIC, 'feedback.html')));
+app.get('/c/:token', (req, res) => res.sendFile(path.join(PUBLIC, 'candidate.html')));
 app.use(express.static(PUBLIC));
 
 // ---------- startup ----------

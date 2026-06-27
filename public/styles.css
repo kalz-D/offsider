@@ -454,3 +454,23 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
 .progress-bar.low { background: var(--watch); }
 .onb-card { display: block; margin-bottom: .8rem; transition: transform .1s ease, box-shadow .15s ease; }
 .onb-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); text-decoration: none; }
+
+/* ---------- Hiring / recruitment ---------- */
+.badge-proactive { background: var(--brand-50); color: var(--brand); }
+.guard-banner { background: var(--brand-50); border: 1px solid var(--brand); border-radius: var(--r); padding: .7rem 1rem; font-size: .92rem; margin: .8rem 0 1.1rem; }
+.iq-group { margin-bottom: 1.1rem; }
+.iq-cat { font-family: var(--font-head); font-weight: 800; font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-faint); margin: .9rem 0 .5rem; }
+.iq { border: 1px solid var(--line); border-radius: var(--r); padding: .65rem .8rem; margin-bottom: .5rem; background: var(--surface); }
+.iq-check { display: flex; gap: .55rem; align-items: flex-start; cursor: pointer; font-weight: 600; }
+.iq-check input { accent-color: var(--brand); width: 17px; height: 17px; margin-top: .15rem; flex: none; }
+.iq-note { width: 100%; margin-top: .5rem; font-size: .9rem; }
+.iq-why { font-size: .78rem; color: var(--ink-faint); margin-top: .35rem; }
+.dna { margin: 1.2rem 0; border: 1px solid var(--watch); border-radius: var(--r-lg); background: var(--watch-50); overflow: hidden; }
+.dna > summary { cursor: pointer; padding: .9rem 1.1rem; font-family: var(--font-head); font-weight: 800; color: var(--watch); list-style: none; }
+.dna > summary::-webkit-details-marker { display: none; }
+.dna-body { padding: 0 1.1rem 1rem; }
+.dna-item { padding: .8rem 0; border-top: 1px dashed var(--line-strong); }
+.dna-topic { font-weight: 800; }
+.dna-eg { font-size: .85rem; color: var(--ink-soft); font-style: italic; margin: .25rem 0; }
+.dna-why { font-size: .85rem; color: var(--ink-soft); margin: .25rem 0; }
+.dna-instead { font-size: .88rem; color: var(--positive-700); font-weight: 600; margin-top: .3rem; }

@@ -106,6 +106,12 @@ const SCHEMA_SQL = `
     id TEXT PRIMARY KEY, business_id TEXT NOT NULL, employee_id TEXT NOT NULL, lesson_id TEXT NOT NULL,
     status TEXT DEFAULT 'assigned', score REAL, answers TEXT, assigned_by TEXT, assigned_at TEXT, completed_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS candidates (
+    id TEXT PRIMARY KEY, business_id TEXT NOT NULL, name TEXT NOT NULL, email TEXT, phone TEXT,
+    role_applied TEXT, status TEXT DEFAULT 'new', token TEXT UNIQUE, resume_text TEXT,
+    application TEXT, interview TEXT, offer TEXT, hired_employee_id TEXT,
+    created_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  );
   CREATE INDEX IF NOT EXISTS idx_users_business ON users(business_id);
   CREATE INDEX IF NOT EXISTS idx_emp_business   ON employees(business_id);
   CREATE INDEX IF NOT EXISTS idx_cases_business ON cases(business_id);
@@ -116,6 +122,7 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_lifecycle_emp  ON lifecycle_completions(employee_id);
   CREATE INDEX IF NOT EXISTS idx_notes_emp      ON notes(employee_id);
   CREATE INDEX IF NOT EXISTS idx_lessons_emp    ON lessons_progress(employee_id);
+  CREATE INDEX IF NOT EXISTS idx_candidates_biz ON candidates(business_id);
 `;
 
 async function init() {

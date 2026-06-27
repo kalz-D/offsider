@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Application · Offsider</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  body { background: var(--brand); }
+  .fb-wrap { max-width: 580px; margin: 0 auto; padding: 1.4rem 1rem 4rem; }
+  .fb-top { display: flex; align-items: center; gap: .5rem; color: #fff; padding: 1rem .2rem 1.6rem; }
+  .fb-card { background: var(--surface); border-radius: var(--r-xl); box-shadow: var(--shadow-lg); padding: 1.7rem 1.5rem; }
+  .fb-card h1 { font-size: 1.55rem; }
+  .q { margin: 1.3rem 0; }
+  .q .qlabel { font-family: var(--font-head); font-weight: 700; font-size: 1rem; margin-bottom: .2rem; }
+  .q .qhelp { font-size: .84rem; color: var(--ink-faint); margin-bottom: .55rem; }
+  .q .req { color: var(--brand); }
+  .choices { display: grid; gap: .5rem; }
+  .choices label { display: flex; align-items: center; gap: .6rem; padding: .75em .9em; border: 1.5px solid var(--line-strong); border-radius: var(--r); cursor: pointer; font-weight: 500; }
+  .choices label.sel { border-color: var(--brand); background: var(--brand-50); }
+  .choices input { accent-color: var(--brand); width: 18px; height: 18px; flex: none; }
+  .offer-box { background: var(--brand-50); border: 1.5px solid var(--brand); border-radius: var(--r-lg); padding: 1.1rem 1.2rem; margin: 1.1rem 0; }
+  .offer-box .line { display: flex; justify-content: space-between; padding: .35rem 0; border-bottom: 1px dashed var(--line); }
+  .offer-box .line:last-child { border-bottom: none; }
+  .offer-box .k { color: var(--ink-faint); }
+  .offer-box .v { font-family: var(--font-head); font-weight: 800; }
+  .fb-done { text-align: center; padding: 2rem 1rem; }
+  .fb-done .big { font-size: 3rem; }
+  .fb-foot { text-align: center; color: #bcd2e0; font-size: .82rem; margin-top: 1.4rem; }
+  textarea, input[type=text], input[type=tel] { width: 100%; }
+</style>
+</head>
+<body>
+<div class="fb-wrap">
+  <div class="fb-top"><span class="logo-mark"><svg viewBox="0 0 24 24"><path d="M12 2 L16.5 12.5 L12 10.2 L7.5 12.5 Z" fill="#fff"/><path d="M12 22 L7.5 11.5 L12 13.8 L16.5 11.5 Z" fill="#fff" opacity=".4"/></svg></span><strong style="font-family:var(--font-head);font-size:1.15rem">Offsider</strong></div>
+  <div id="box"><div class="fb-card"><div class="loading-full" style="min-height:120px"><div class="spinner"></div></div></div></div>
+  <div class="fb-foot">Powered by Offsider</div>
+</div>
+
+<script>
+(function () {
+  var token = location.pathname.split('/').filter(Boolean).pop();
+  var box = document.getElementById('box');
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); };
+  var data = null, answers = {};
+
+  fetch('/api/public/candidate/' + token).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (res) {
+      if (!res.ok) { box.innerHTML = card('<div class="fb-done"><div class="big">🤷</div><h1>' + esc(res.j.error || 'Link not found') + '</h1></div>'); return; }
+      data = res.j;
+      if (data.stage === 'application') renderApplication();
+      else if (data.stage === 'offer') renderOffer();
+      else renderDone();
+    });
+
+  function card(inner) { return '<div class="fb-card">' + inner + '</div>'; }
+
+  function renderApplication() {
+    var fields = (data.applicationFields || []).map(function (f) {
+      var inner;
+      if (f.type === 'choice') {
+        inner = '<div class="choices" data-choice="' + f.id + '">' + (f.options || []).map(function (o) {
+          return '<label><input type="radio" name="' + f.id + '" value="' + esc(o) + '"> ' + esc(o) + '</label>';
+        }).join('') + '</div>';
+      } else if (f.type === 'textarea') {
+        inner = '<textarea data-text="' + f.id + '" rows="3" placeholder="Type your answer…"></textarea>';
+      } else {
+        inner = '<input type="text" data-text="' + f.id + '" placeholder="Type your answer…">';
+      }
+      return '<div class="q"><div class="qlabel">' + esc(f.label) + (f.required ? ' <span class="req">*</span>' : '') + '</div>' +
+        (f.help ? '<div class="qhelp">' + esc(f.help) + '</div>' : '') + inner + '</div>';
+    }).join('');
+
+    box.innerHTML = card(
+      '<h1>Quick application</h1>' +
+      '<p class="muted">' + esc(data.roleApplied ? data.roleApplied + ' at ' + data.businessName : 'A role at ' + data.businessName) + '. Takes a couple of minutes — it just helps us have a good chat.</p>' +
+      '<div class="q"><div class="qlabel">Best contact number</div><input type="tel" id="phone" placeholder="So we can reach you"></div>' +
+      fields +
+      '<div id="err"></div>' +
+      '<button class="btn btn-primary btn-block btn-lg" id="submit">Send application →</button>');
+
+    box.querySelectorAll('[data-choice] input').forEach(function (inp) {
+      inp.onchange = function () {
+        answers[inp.name] = inp.value;
+        inp.closest('[data-choice]').querySelectorAll('label').forEach(function (l) { l.classList.remove('sel'); });
+        inp.closest('label').classList.add('sel');
+      };
+    });
+    box.querySelectorAll('[data-text]').forEach(function (t) { t.oninput = function () { answers[t.getAttribute('data-text')] = t.value; }; });
+    document.getElementById('submit').onclick = submitApplication;
+  }
+
+  function submitApplication() {
+    var missing = (data.applicationFields || []).filter(function (f) { return f.required && !answers[f.id]; });
+    if (missing.length) { document.getElementById('err').innerHTML = '<div class="error-msg">Please answer the questions marked with *.</div>'; return; }
+    var btn = document.getElementById('submit');
+    var phone = document.getElementById('phone');
+    btn.disabled = true; btn.textContent = 'Sending…';
+    fetch('/api/public/candidate/' + token + '/apply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answers: answers, phone: phone ? phone.value : null })
+    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) { document.getElementById('err').innerHTML = '<div class="error-msg">' + esc(res.j.error || 'Could not send') + '</div>'; btn.disabled = false; btn.textContent = 'Send application →'; return; }
+        box.innerHTML = card('<div class="fb-done"><div class="big">🙌</div><h1>Thanks, ' + esc((data.candidateName || '').split(' ')[0]) + '!</h1><p class="muted">Your application is in with ' + esc(data.businessName) + '. We\'ll be in touch about the next steps.</p></div>');
+      });
+  }
+
+  function renderOffer() {
+    var o = data.offer || {};
+    var basis = o.pay_basis === 'year' ? '/year' : o.pay_basis === 'week' ? '/week' : '/hour';
+    box.innerHTML = card(
+      '<div style="font-size:2.5rem">🎉</div>' +
+      '<h1>' + esc(data.businessName) + ' would like to offer you the job!</h1>' +
+      '<p class="muted">Here\'s the offer for the ' + esc(o.roleTitle || 'role') + '. Have a read, and if you\'re happy, hit accept below.</p>' +
+      '<div class="offer-box">' +
+        '<div class="line"><span class="k">Role</span><span class="v">' + esc(o.roleTitle || '—') + '</span></div>' +
+        '<div class="line"><span class="k">Pay</span><span class="v">' + (o.rate ? '$' + esc(o.rate) + basis : 'As discussed') + '</span></div>' +
+        '<div class="line"><span class="k">Start date</span><span class="v">' + esc(o.start_date || 'To be confirmed') + '</span></div>' +
+      '</div>' +
+      (o.message ? '<p>' + esc(o.message) + '</p>' : '') +
+      '<p class="muted" style="font-size:.85rem">This offer is subject to the usual checks (references, right to work, and any tickets the role needs).</p>' +
+      '<div id="err"></div>' +
+      '<button class="btn btn-primary btn-block btn-lg" id="accept">✓ Accept the offer</button>');
+    document.getElementById('accept').onclick = function () {
+      var btn = document.getElementById('accept');
+      btn.disabled = true; btn.textContent = 'One sec…';
+      fetch('/api/public/candidate/' + token + '/accept', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+          if (!res.ok) { document.getElementById('err').innerHTML = '<div class="error-msg">' + esc(res.j.error || 'Could not accept') + '</div>'; btn.disabled = false; btn.textContent = '✓ Accept the offer'; return; }
+          box.innerHTML = card('<div class="fb-done"><div class="big">🎉</div><h1>You\'re in!</h1><p class="muted">You\'ve accepted the offer with ' + esc(data.businessName) + '. They\'ll be in touch to get you started. Welcome aboard!</p></div>');
+        });
+    };
+  }
+
+  function renderDone() {
+    if (data.accepted) box.innerHTML = card('<div class="fb-done"><div class="big">🎉</div><h1>All sorted!</h1><p class="muted">You\'ve accepted the offer with ' + esc(data.businessName) + '. See you soon.</p></div>');
+    else box.innerHTML = card('<div class="fb-done"><div class="big">✅</div><h1>Thanks!</h1><p class="muted">Your application with ' + esc(data.businessName) + ' is in. Nothing more to do right now.</p></div>');
+  }
+})();
+</script>
+</body>
+</html>

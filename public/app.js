@@ -111,6 +111,7 @@
       item('home', '#/', '🏠', 'Home') +
       item('new', '#/new', '✨', 'Start something') +
       '<div class="nav-group-label">Manage</div>' +
+      item('hiring', '#/hiring', '🧑‍💼', 'Hiring') +
       item('team', '#/team', '👷', 'Workers') +
       item('onboarding', '#/onboarding', '👋', 'Onboarding') +
       item('cases', '#/cases', '🗂️', 'Cases') +
@@ -798,6 +799,141 @@
     };
   }
 
+  // ---------------- HIRING / recruitment ----------------
+  async function getInterviewKit() { if (!State.kit) State.kit = await api('GET', '/interview-kit'); return State.kit; }
+  const CAND_STATUS = {
+    new: { label: 'Added', cls: '' }, applied: { label: 'Applied', cls: 'badge-proactive' },
+    interview: { label: 'Interviewing', cls: 'badge-watchful' }, offer: { label: 'Offer sent', cls: 'badge-proactive' },
+    accepted: { label: 'Accepted ✓', cls: 'badge-positive' }, hired: { label: 'Hired 🎉', cls: 'badge-positive' },
+    declined: { label: 'Declined', cls: '' }, rejected: { label: 'Not proceeding', cls: '' }
+  };
+  function statusBadge(s) { const m = CAND_STATUS[s] || { label: s, cls: '' }; return '<span class="badge ' + m.cls + '">' + esc(m.label) + '</span>'; }
+
+  async function viewHiring() {
+    const cands = await api('GET', '/candidates');
+    const closedSet = { hired: 1, rejected: 1, declined: 1 };
+    const active = cands.filter((c) => !closedSet[c.status]);
+    const done = cands.filter((c) => closedSet[c.status]);
+    const row = (c) => '<a href="#/candidate/' + c.id + '" class="row"><span class="ic-circle">🧑‍💼</span><span class="grow"><span class="t">' + esc(c.name) + '</span><span class="s">' + esc(c.role_applied || 'Role TBC') + (c.phone ? ' · ' + esc(c.phone) : '') + '</span></span><span class="meta">' + statusBadge(c.status) + '</span></a>';
+    const body =
+      '<div class="section-title"><h3>Hiring pipeline</h3><button class="btn btn-primary btn-sm" id="addCand">+ Add a candidate</button></div>' +
+      '<p class="muted" style="max-width:64ch;margin-top:-.3rem">From first application to first day. Add a candidate, send them a quick form, run a fair interview, make an offer — and when they accept, turn them into a worker with onboarding ready to go.</p>' +
+      (active.length ? '<div class="row-list">' + active.map(row).join('') + '</div>'
+        : '<div class="empty"><span class="ic">🧑‍💼</span>No one in the pipeline yet.<br>Add a candidate to get started.<br><button class="btn btn-primary" style="margin-top:1.2rem" id="addCand2">+ Add a candidate</button></div>') +
+      (done.length ? '<div class="section-title" style="margin-top:1.8rem"><h3>Closed (' + done.length + ')</h3></div><div class="row-list">' + done.map(row).join('') + '</div>' : '');
+    layout('hiring', 'Hiring', body);
+    const a = $('#addCand'); if (a) a.onclick = openAddCandidate;
+    const a2 = $('#addCand2'); if (a2) a2.onclick = openAddCandidate;
+  }
+
+  async function openAddCandidate() {
+    openModal('<h2>Add a candidate</h2><p class="muted">Just the basics to start — you\'ll send them a quick application form next.</p>' +
+      '<div class="field"><label>Name *</label><input id="cName" placeholder="e.g. Alex Rivera"></div>' +
+      '<div class="field"><label>Role they\'re applying for</label><input id="cRole" placeholder="e.g. Laboratory Assistant"></div>' +
+      '<div class="grid grid-2"><div class="field"><label>Email</label><input id="cEmail" placeholder="name@email.com"></div><div class="field"><label>Phone</label><input id="cPhone" placeholder="0400 000 000"></div></div>' +
+      '<div class="modal-foot"><button class="btn btn-ghost" id="cCancel">Cancel</button><button class="btn btn-primary" id="cSave">Add candidate</button></div>');
+    $('#cCancel').onclick = closeModal;
+    $('#cSave').onclick = async () => {
+      const name = $('#cName').value.trim();
+      if (!name) { toast('A name is needed', 'error'); return; }
+      const r = await api('POST', '/candidates', { name, role_applied: $('#cRole').value.trim(), email: $('#cEmail').value.trim(), phone: $('#cPhone').value.trim() });
+      closeModal(); location.hash = '#/candidate/' + r.id;
+    };
+  }
+
+  async function viewCandidate(id) {
+    const [c, kit] = await Promise.all([api('GET', '/candidates/' + id), getInterviewKit()]);
+    const link = location.origin + '/c/' + c.token;
+    const iv = c.interview && typeof c.interview === 'object' ? c.interview : {};
+    iv.asked = iv.asked || {}; iv.notes = iv.notes || {}; iv.gut = iv.gut || {};
+
+    // application
+    let appHtml;
+    if (c.application) {
+      const fl = {}; (kit.applicationFields || []).forEach((f) => { fl[f.id] = f.label; });
+      appHtml = '<div class="row-list">' + Object.keys(c.application).map((k) => '<div class="resp-card" style="margin:0 0 .5rem"><div class="resp-q">' + esc(fl[k] || k) + '</div><div class="resp-a">' + esc(c.application[k] || '—') + '</div></div>').join('') + '</div>';
+    } else {
+      appHtml = '<div class="panel"><strong>Send them this application link</strong><div class="muted" style="font-size:.9rem;margin:.2rem 0">A short, lawful form — right to work, ability to do the role, availability. They fill it on their phone, no login.</div><div class="link-box"><code>' + esc(link) + '</code><button class="btn btn-primary btn-sm" id="copyApp">Copy</button></div></div>';
+    }
+
+    // interview questions
+    const groups = {};
+    (kit.lawfulQuestions || []).forEach((q, i) => { const g = groups[q.category] = groups[q.category] || []; g.push({ key: 'L' + i, q: q.question, why: q.why }); });
+    const jobG = (kit.jobRequirementQuestions || []).map((q, i) => ({ key: 'J' + i, q: q.question, why: q.why }));
+    const qRow = (it) => '<div class="iq"><label class="iq-check"><input type="checkbox" data-asked="' + it.key + '"' + (iv.asked[it.key] ? ' checked' : '') + '><span>' + esc(it.q) + '</span></label>' +
+      '<input class="iq-note" data-note="' + it.key + '" placeholder="What they said / your note…" value="' + esc(iv.notes[it.key] || '') + '">' +
+      (it.why ? '<div class="iq-why">' + esc(it.why) + '</div>' : '') + '</div>';
+    const lawfulHtml = Object.keys(groups).map((cat) => '<div class="iq-group"><div class="iq-cat">' + esc(cat) + '</div>' + groups[cat].map(qRow).join('') + '</div>').join('');
+    const jobHtml = '<div class="iq-group"><div class="iq-cat">✅ Can they do the job? <span class="muted" style="font-weight:400">(always lawful — ask about the work)</span></div>' + jobG.map(qRow).join('') + '</div>';
+    const dnaHtml = (kit.doNotAsk || []).map((d) => '<div class="dna-item"><div class="dna-topic">🚫 ' + esc(d.topic) + '</div>' + (d.example ? '<div class="dna-eg">Avoid: ' + esc(d.example) + '</div>' : '') + '<div class="dna-why">' + esc(d.why) + '</div><div class="dna-instead">✅ Instead: ' + esc(d.insteadAsk) + '</div></div>').join('');
+    const gutHtml = (kit.gutFeelPrompts || []).map((p, i) => '<div class="field"><label>' + esc(p) + '</label><textarea data-gut="G' + i + '" rows="2">' + esc(iv.gut['G' + i] || '') + '</textarea></div>').join('');
+
+    // offer / hire actions
+    const fn = c.name.split(' ')[0];
+    let actionHtml;
+    if (c.status === 'accepted') actionHtml = '<div class="panel" style="background:var(--positive-50);border-color:var(--positive)"><strong>🎉 ' + esc(fn) + ' accepted the offer!</strong><div class="muted" style="font-size:.9rem;margin:.2rem 0 .7rem">Turn them into a worker and their onboarding plan kicks off automatically.</div><button class="btn btn-primary" id="hireBtn">Convert to worker &amp; start onboarding →</button></div>';
+    else if (c.status === 'hired') actionHtml = '<div class="panel"><strong>Hired 🎉</strong> &nbsp; <a href="#/member/' + c.hired_employee_id + '" class="btn btn-ghost btn-sm">Open their worker file →</a></div>';
+    else if (c.status === 'offer') actionHtml = '<div class="panel"><strong>Offer sent — waiting on ' + esc(fn) + '</strong><div class="muted" style="font-size:.9rem;margin:.2rem 0">They can accept on their link, or record it here.</div><div class="link-box"><code>' + esc(link) + '</code><button class="btn btn-ghost btn-sm" id="copyOfferLink">Copy</button></div><div style="display:flex;gap:.5rem;margin-top:.6rem"><button class="btn btn-primary btn-sm" id="markAccepted">✓ They accepted</button><button class="btn btn-ghost btn-sm" id="makeOffer2">Edit / re-send offer</button></div></div>';
+    else actionHtml = '<div class="panel"><strong>Ready to make an offer?</strong><div class="muted" style="font-size:.9rem;margin:.2rem 0 .7rem">Offsider writes the offer email for you and gives them a one-click accept link.</div><button class="btn btn-primary" id="makeOffer">💼 Make an offer</button></div>';
+
+    const header = '<div><h1 style="margin:0 0 .15rem">' + esc(c.name) + '</h1><div class="muted">' + esc(c.role_applied || 'Role TBC') + ' &nbsp;·&nbsp; ' + statusBadge(c.status) + '</div>' +
+      ((c.email || c.phone) ? '<div class="muted" style="font-size:.86rem;margin-top:.25rem">' + [c.email, c.phone].filter(Boolean).map(esc).join(' &nbsp;·&nbsp; ') + '</div>' : '') + '</div>';
+
+    layout('hiring', c.name,
+      header +
+      '<div class="section-title" style="margin-top:1.4rem"><h3>📋 Application</h3></div>' + appHtml +
+      actionHtml +
+      '<div class="section-title" style="margin-top:1.8rem"><h3>🎤 Interview</h3><button class="btn btn-primary btn-sm" id="saveIv">Save interview</button></div>' +
+      '<div class="guard-banner">🧭 <strong>Ask about the job, not the person.</strong> Tick what you asked and jot their answers — every question below is lawful to ask.</div>' +
+      lawfulHtml + jobHtml +
+      '<details class="dna"><summary>⚠️ Questions you must NOT ask — and what to ask instead</summary><div class="dna-body">' + dnaHtml + '</div></details>' +
+      '<div class="section-title" style="margin-top:1.4rem"><h3>🤔 Your read on them</h3></div>' + gutHtml +
+      '<div class="field"><label>Things to tell the candidate (about the role, pay, next steps)</label><textarea id="tellThem" rows="2">' + esc(iv.tellThem || '') + '</textarea></div>' +
+      '<div class="section-title" style="margin-top:1.8rem"><h3>📄 Resume / notes</h3></div>' +
+      '<div class="field"><textarea id="resume" rows="5" placeholder="Paste their resume or any notes here…">' + esc(c.resume_text || '') + '</textarea></div><button class="btn btn-ghost btn-sm" id="saveResume">Save resume</button>',
+      '<a href="#/hiring">Hiring</a>');
+
+    const cA = $('#copyApp'); if (cA) cA.onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(link); toast('Application link copied — text or email it'); };
+    const cOL = $('#copyOfferLink'); if (cOL) cOL.onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(link); toast('Link copied'); };
+    root().querySelectorAll('[data-asked]').forEach((el) => { el.onchange = () => { iv.asked[el.getAttribute('data-asked')] = el.checked; }; });
+    root().querySelectorAll('[data-note]').forEach((el) => { el.oninput = () => { iv.notes[el.getAttribute('data-note')] = el.value; }; });
+    root().querySelectorAll('[data-gut]').forEach((el) => { el.oninput = () => { iv.gut[el.getAttribute('data-gut')] = el.value; }; });
+    const tt = $('#tellThem'); if (tt) tt.oninput = () => { iv.tellThem = tt.value; };
+    $('#saveIv').onclick = async () => {
+      const status = (c.status === 'new' || c.status === 'applied') ? 'interview' : c.status;
+      await api('PATCH', '/candidates/' + id, { interview: iv, status });
+      toast('Interview saved'); if (status !== c.status) viewCandidate(id);
+    };
+    const sr = $('#saveResume'); if (sr) sr.onclick = async () => { await api('PATCH', '/candidates/' + id, { resume_text: $('#resume').value }); toast('Saved'); };
+    const mo = $('#makeOffer'); if (mo) mo.onclick = () => openOffer(c);
+    const mo2 = $('#makeOffer2'); if (mo2) mo2.onclick = () => openOffer(c);
+    const ma = $('#markAccepted'); if (ma) ma.onclick = async () => { await api('PATCH', '/candidates/' + id, { status: 'accepted' }); toast('Marked as accepted'); viewCandidate(id); };
+    const hb = $('#hireBtn'); if (hb) hb.onclick = async () => { const r = await api('POST', '/candidates/' + id + '/hire'); toast('Welcome aboard! Onboarding started'); location.hash = '#/member/' + r.employee_id; };
+  }
+
+  async function openOffer(c) {
+    openModal('<h2>Make an offer to ' + esc(c.name.split(' ')[0]) + '</h2>' +
+      '<div class="grid grid-2"><div class="field"><label>Pay rate</label><input id="oRate" placeholder="e.g. 28.50"></div>' +
+      '<div class="field"><label>Per</label><select id="oBasis"><option value="hour">hour</option><option value="week">week</option><option value="year">year</option></select></div></div>' +
+      '<div class="grid grid-2"><div class="field"><label>Start date</label><input type="date" id="oStart"></div>' +
+      '<div class="field"><label>Employment type</label><select id="oType"><option>Full time</option><option>Part time</option><option>Casual</option><option>Apprentice</option></select></div></div>' +
+      '<div class="field"><label>A personal line (optional)</label><textarea id="oMsg" rows="2" placeholder="e.g. The whole team really enjoyed meeting you…"></textarea></div>' +
+      '<div class="modal-foot"><button class="btn btn-ghost" id="oCancel">Cancel</button><button class="btn btn-primary" id="oSave">Generate offer →</button></div>');
+    $('#oCancel').onclick = closeModal;
+    $('#oSave').onclick = async () => {
+      const r = await api('POST', '/candidates/' + c.id + '/offer', { rate: $('#oRate').value.trim(), pay_basis: $('#oBasis').value, start_date: $('#oStart').value, employment_type: $('#oType').value, message: $('#oMsg').value.trim() });
+      const acceptLink = location.origin + r.acceptPath;
+      openModal('<h2>Offer ready ✉️</h2><p class="muted">Copy this into an email to ' + esc(c.name.split(' ')[0]) + '. They can accept on their own link — you\'ll see it update here.</p>' +
+        '<div class="field"><label>Subject</label><input id="oSubj" value="' + esc(r.subject) + '" readonly></div>' +
+        '<div class="field"><label>Message</label><textarea rows="11" readonly>' + esc(r.body) + '</textarea></div>' +
+        '<div class="field"><label>Their accept link</label><div class="link-box"><code>' + esc(acceptLink) + '</code><button class="btn btn-ghost btn-sm" id="copyAccept">Copy</button></div></div>' +
+        '<div class="modal-foot"><button class="btn btn-ghost" id="oClose">Close</button><button class="btn btn-primary" id="copyBody">Copy email</button></div>');
+      $('#copyBody').onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(r.subject + '\n\n' + r.body); toast('Offer email copied'); };
+      $('#copyAccept').onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(acceptLink); toast('Accept link copied'); };
+      $('#oClose').onclick = () => { closeModal(); viewCandidate(c.id); };
+    };
+  }
+
   async function viewMember(id) {
     const e = await api('GET', '/employees/' + id);
     e.development = e.development || {};
@@ -1194,6 +1330,8 @@
         return await viewStaffHome();
       }
       if (hash.indexOf('#/case/') === 0) return await viewCase(hash.split('/')[2]);
+      if (hash.indexOf('#/candidate/') === 0) return await viewCandidate(hash.split('/')[2]);
+      if (hash.indexOf('#/hiring') === 0) return await viewHiring();
       if (hash.indexOf('#/training/') === 0) return await viewTrainingRecord(hash.split('/')[2]);
       if (hash.indexOf('#/member/') === 0) return await viewMember(hash.split('/')[2]);
       if (hash.indexOf('#/document/') === 0) return await viewDocument(hash.split('/')[2]);
