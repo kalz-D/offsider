@@ -19,6 +19,7 @@ const starterProfiles = require('./content/starterProfiles');
 const impactTags = require('./content/impactTags');
 const lifecycleRules = require('./content/lifecycleRules');
 const reflectionPrompts = require('./content/reflectionPrompts');
+const lessons = require('./content/lessons');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -51,6 +52,7 @@ const templateById = (id) => templates.find((t) => t.id === id);
 const industryById = (id) => industries.find((i) => i.id === id);
 const feedbackTemplateById = (id) => feedbackTemplates.find((t) => t.id === id);
 const awardById = (id) => awards.find((a) => a.id === id);
+const lessonById = (id) => lessons.find((l) => l.id === id);
 const awardLevel = (awardId, code) => { const a = awardById(awardId); return a ? (a.levels.find((l) => l.id === code) || null) : null; };
 const newToken = () => require('crypto').randomBytes(7).toString('hex');
 function safeParse(s, fallback) { if (s == null || s === '') return fallback; try { const v = JSON.parse(s); return v == null ? fallback : v; } catch (e) { return fallback; } }
@@ -279,6 +281,42 @@ app.post('/api/me/assignments/:id', h(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// staff: lessons assigned to me
+app.get('/api/me/lessons', h(async (req, res) => {
+  const e = await myEmployee(req); if (!e) return res.json([]);
+  const rows = await db.prepare('SELECT * FROM lessons_progress WHERE employee_id = ? ORDER BY assigned_at DESC').all(e.id);
+  res.json(rows.map((r) => { const l = lessonById(r.lesson_id) || {}; return { lesson_id: r.lesson_id, title: l.title || r.lesson_id, blurb: l.blurb || '', competencyLabel: l.competencyLabel || '', status: r.status, score: r.score }; }));
+}));
+app.get('/api/me/lessons/:lessonId', h(async (req, res) => {
+  const e = await myEmployee(req); if (!e) return res.status(400).json({ error: 'No worker profile.' });
+  const l = lessonById(req.params.lessonId); if (!l) return res.status(404).json({ error: 'Lesson not found' });
+  const row = await db.prepare('SELECT * FROM lessons_progress WHERE employee_id = ? AND lesson_id = ?').get(e.id, l.id);
+  if (!row) return res.status(403).json({ error: 'This lesson is not assigned to you.' });
+  res.json({ id: l.id, title: l.title, intro: l.intro, sections: l.sections || [], passMark: l.passMark || 0.7, status: row.status, score: row.score, quiz: (l.quiz || []).map((q) => ({ id: q.id, question: q.question, options: q.options })) });
+}));
+app.post('/api/me/lessons/:lessonId/submit', h(async (req, res) => {
+  const e = await myEmployee(req); if (!e) return res.status(400).json({ error: 'No worker profile.' });
+  const l = lessonById(req.params.lessonId); if (!l) return res.status(404).json({ error: 'Lesson not found' });
+  const row = await db.prepare('SELECT * FROM lessons_progress WHERE employee_id = ? AND lesson_id = ?').get(e.id, l.id);
+  if (!row) return res.status(403).json({ error: 'This lesson is not assigned to you.' });
+  const answers = (req.body && req.body.answers) || {};
+  const quiz = l.quiz || [];
+  let correct = 0;
+  for (const q of quiz) { if (String(answers[q.id]) === String(q.answer)) correct++; }
+  const total = quiz.length || 1;
+  const score = correct / total;
+  const passed = score >= (l.passMark || 0.7);
+  await db.prepare('UPDATE lessons_progress SET status=?, score=?, answers=?, completed_at=? WHERE id=?').run(passed ? 'passed' : 'failed', score, JSON.stringify(answers), now(), row.id);
+  let signed = null;
+  if (passed && l.signsOff) {
+    const emp = await db.prepare('SELECT development FROM employees WHERE id = ?').get(e.id);
+    const dev = safeParse(emp.development, {}); dev.skills = dev.skills || {}; dev.skills[l.signsOff] = true;
+    await db.prepare('UPDATE employees SET development=? WHERE id=?').run(JSON.stringify(dev), e.id);
+    signed = l.competencyLabel || l.signsOff;
+  }
+  res.json({ passed, correct, total, score, signed });
+}));
+
 // ---------- everything below is MANAGERS ONLY ----------
 app.use('/api', requireManager);
 
@@ -307,7 +345,8 @@ app.get('/api/employees/:id', h(async (req, res) => {
   const hasLogin = !!(await db.prepare('SELECT id FROM users WHERE employee_id = ?').get(e.id));
   const wage = buildWageView(e, req.business);
   const schedule = await lifecycleSchedule(e);
-  res.json({ ...e, development: safeParse(e.development, {}), cases, documents, notes, wage, hasLogin, schedule });
+  const lessonsProg = (await db.prepare('SELECT * FROM lessons_progress WHERE employee_id = ? ORDER BY assigned_at DESC').all(e.id)).map((r) => { const l = lessonById(r.lesson_id) || {}; return { lesson_id: r.lesson_id, title: l.title || r.lesson_id, competencyLabel: l.competencyLabel || '', status: r.status, score: r.score }; });
+  res.json({ ...e, development: safeParse(e.development, {}), cases, documents, notes, wage, hasLogin, schedule, lessons: lessonsProg });
 }));
 app.patch('/api/employees/:id', h(async (req, res) => {
   const e = await db.prepare('SELECT * FROM employees WHERE id = ? AND business_id = ?').get(req.params.id, req.business.id);
@@ -455,6 +494,19 @@ app.get('/api/onboarding', h(async (req, res) => {
   }
   out.sort((a, b) => (a.tenure == null ? 9999 : a.tenure) - (b.tenure == null ? 9999 : b.tenure));
   res.json(out);
+}));
+
+// lessons — list + assign to a worker
+app.get('/api/lessons', (req, res) => res.json(lessons.map((l) => ({ id: l.id, title: l.title, blurb: l.blurb, forRoles: l.forRoles || [], competencyLabel: l.competencyLabel, signsOff: l.signsOff || null, questions: (l.quiz || []).length }))));
+app.post('/api/employees/:id/lessons', h(async (req, res) => {
+  const e = await db.prepare('SELECT * FROM employees WHERE id = ? AND business_id = ?').get(req.params.id, req.business.id);
+  if (!e) return res.status(404).json({ error: 'Not found' });
+  const l = lessonById((req.body || {}).lesson_id);
+  if (!l) return res.status(400).json({ error: 'Unknown lesson' });
+  const existing = await db.prepare('SELECT id FROM lessons_progress WHERE employee_id = ? AND lesson_id = ?').get(e.id, l.id);
+  if (existing) return res.json({ ok: true, already: true });
+  await db.prepare('INSERT INTO lessons_progress (id, business_id, employee_id, lesson_id, status, assigned_by, assigned_at) VALUES (?,?,?,?,?,?,?)').run(uid(), req.business.id, e.id, l.id, 'assigned', req.user.id, now());
+  res.json({ ok: true });
 }));
 
 // worker-attached document

@@ -40,6 +40,8 @@ module.exports = async function seed(ctx) {
       goals: [{ id: 'g1', title: 'Get signed off as NATA signatory for compaction & CBR', target: off(90), done: false }]
     };
     await db.prepare('UPDATE employees SET development=? WHERE id=?').run(JSON.stringify(dev), ids['Tom Whitfield']);
+    // a lesson waiting in his portal so the demo shows the training-lessons feature
+    await db.prepare('INSERT INTO lessons_progress (id, business_id, employee_id, lesson_id, status, assigned_by, assigned_at) VALUES (?,?,?,?,?,?,?)').run(uid(), bizId, ids['Tom Whitfield'], 'concrete_cylinders', 'assigned', ownerId, off(-2));
   }
 
   // staff login for Tom

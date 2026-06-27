@@ -50,6 +50,7 @@
   async function getAward(id) { State.awards = State.awards || {}; if (!State.awards[id]) State.awards[id] = await api('GET', '/awards/' + id); return State.awards[id]; }
   async function getNoteTypes() { if (!State.noteTypes) State.noteTypes = (await api('GET', '/note-types')).noteTypes; return State.noteTypes; }
   async function getConfig() { if (!State.config) State.config = await api('GET', '/config'); return State.config; }
+  async function getLessons() { if (!State.lessons) State.lessons = await api('GET', '/lessons'); return State.lessons; }
   const money = (n) => '$' + Number(n).toFixed(2);
   const ownerLabel = (o) => ({ manager: 'You', senior_manager: 'Senior mgr', buddy: 'Buddy', staff: 'Staff' }[o] || o);
   function relativeDue(d) { if (d < 0) return 'Overdue by ' + (-d) + ' day' + (-d === 1 ? '' : 's'); if (d === 0) return 'Due today'; if (d === 1) return 'Due tomorrow'; if (d <= 21) return 'Due in ' + d + ' days'; return 'Due in ~' + Math.round(d / 7) + ' weeks'; }
@@ -900,6 +901,11 @@
       ? '<div class="section-title" style="margin-top:1.8rem"><h3>Their plans &amp; documents</h3></div><div class="row-list">' + e.documents.map((dc) => '<a href="#/document/' + dc.id + '" class="row"><span class="ic-circle">📄</span><span class="grow"><span class="t">' + esc(dc.title) + '</span><span class="s">' + fmtDate(dc.created_at) + '</span></span><span class="meta">View →</span></a>').join('') + '</div>'
       : '';
 
+    // 🎓 lessons & tests
+    const lessonStatus = (s) => s.status === 'passed' ? '<span class="badge badge-positive">✓ Passed' + (s.score != null ? ' ' + Math.round(s.score * 100) + '%' : '') + '</span>' : (s.status === 'failed' ? '<span class="badge badge-watchful">Not passed yet</span>' : '<span class="badge">Assigned</span>');
+    const lessonsSection = '<div class="section-title" style="margin-top:1.8rem"><h3>🎓 Lessons & tests</h3><button class="btn btn-ghost btn-sm" id="assignLesson">+ Assign a lesson</button></div>' +
+      ((e.lessons && e.lessons.length) ? '<div class="row-list">' + e.lessons.map((s) => '<div class="row" style="cursor:default"><span class="ic-circle">🎓</span><span class="grow"><span class="t">' + esc(s.title) + '</span>' + (s.competencyLabel ? '<span class="s">signs off: ' + esc(s.competencyLabel) + '</span>' : '') + '</span><span class="meta">' + lessonStatus(s) + '</span></div>').join('') + '</div>' : '<div class="muted">No lessons assigned yet. Assign one — passing it ticks the competency.</div>');
+
     // 📅 lifecycle plan
     const firstName = (e.name || '').split(' ')[0];
     const sched = (e.schedule || []).filter((m) => !m.done);
@@ -915,6 +921,7 @@
       header + scheduleSection +
       '<div class="section-title" style="margin-top:1.8rem"><h3>💰 Pay & progression</h3></div>' + wagePanel +
       '<div class="section-title" style="margin-top:1.8rem"><h3>🚀 Development</h3></div>' + devPanel +
+      lessonsSection +
       '<div class="section-title" style="margin-top:1.8rem"><h3>📝 Notes & observations</h3></div>' + notesList + noteForm +
       casesSection + docsSection, '<a href="#/team">Workers</a>');
 
@@ -951,6 +958,7 @@
     const so = $('#startOnb'); if (so) so.onclick = async () => { const c = await api('POST', '/cases', { employee_id: e.id, flow_id: 'onboarding' }); location.hash = '#/case/' + c.id; };
     const qh = $('#quickNoteHere'); if (qh) qh.onclick = () => openQuickNote(e.id);
     const rb = $('#reflectBtn'); if (rb) rb.onclick = () => openReflection(e);
+    const al = $('#assignLesson'); if (al) al.onclick = () => openLessonAssign(e.id);
     root().querySelectorAll('.moment-done').forEach((b) => { b.onclick = async () => { await api('POST', '/lifecycle/done', { employee_id: e.id, rule_id: b.dataset.r, occurrence_key: b.dataset.k }); viewMember(e.id); }; });
     root().querySelectorAll('.moment-do').forEach((b) => { b.onclick = () => { const m = (e.schedule || []).find((x) => x.rule_id === b.dataset.r && x.occurrence_key === b.dataset.k); if (m) doMoment(e, m); }; });
   }
@@ -1090,12 +1098,17 @@
   }
 
   async function viewStaffHome() {
-    const [me, assignments] = await Promise.all([api('GET', '/me'), api('GET', '/me/assignments')]);
+    const [me, assignments, myLessons] = await Promise.all([api('GET', '/me'), api('GET', '/me/assignments'), api('GET', '/me/lessons')]);
     const pending = assignments.filter((a) => !a.completed);
     const done = assignments.filter((a) => a.completed);
     const checkins = pending.length
       ? '<div class="row-list">' + pending.map((a) => '<a href="#/checkin/' + a.id + '" class="row"><span class="ic-circle">' + (a.anonymous ? '🔒' : '📝') + '</span><span class="grow"><span class="t">' + esc(a.title) + '</span><span class="s">' + cadenceLabel(a.cadence) + (a.anonymous ? ' · anonymous' : '') + '</span></span><span class="meta">Fill in →</span></a>').join('') + '</div>'
       : '<div class="card card-pad muted">All done — nothing to fill in right now. 👍</div>';
+    const lessonsHtml = (myLessons && myLessons.length)
+      ? '<div class="row-list">' + myLessons.map((l) => l.status === 'passed'
+        ? '<div class="row" style="cursor:default"><span class="ic-circle" style="background:var(--positive-50)">✅</span><span class="grow"><span class="t">' + esc(l.title) + '</span><span class="s">Passed' + (l.score != null ? ' · ' + Math.round(l.score * 100) + '%' : '') + (l.competencyLabel ? ' · signed off ' + esc(l.competencyLabel) : '') + '</span></span></div>'
+        : '<a href="#/lesson/' + l.lesson_id + '" class="row"><span class="ic-circle">🎓</span><span class="grow"><span class="t">' + esc(l.title) + '</span><span class="s">' + esc(l.blurb || '') + '</span></span><span class="meta">Start →</span></a>').join('') + '</div>'
+      : '';
 
     const w = me.wage;
     let pathCard = '';
@@ -1112,6 +1125,7 @@
       '<h1 style="font-size:1.8rem;margin-bottom:.2rem">G\'day, ' + esc(State.me.name.split(' ')[0]) + '</h1>' +
       '<p class="muted">Anything the team needs from you is below — most take a minute.</p>' +
       '<div class="section-title"><h3>📋 Your check-ins</h3>' + (done.length ? '<span class="muted" style="font-size:.85rem">' + done.length + ' done this period</span>' : '') + '</div>' + checkins +
+      (lessonsHtml ? '<div class="section-title" style="margin-top:1.8rem"><h3>📚 Your lessons</h3></div>' + lessonsHtml : '') +
       (pathCard ? '<div class="section-title" style="margin-top:1.8rem"><h3>Your career & pay</h3></div>' + pathCard : ''));
   }
 
@@ -1136,6 +1150,37 @@
     };
   }
 
+  async function viewStaffLesson(lessonId) {
+    const l = await api('GET', '/me/lessons/' + lessonId);
+    const sections = (l.sections || []).map((s) => '<div style="margin-bottom:1.1rem"><div style="font-family:var(--font-head);font-weight:700;margin-bottom:.2rem">' + esc(s.heading) + '</div><div style="color:var(--ink-soft)">' + nl2br(s.body) + '</div></div>').join('');
+    const ans = {};
+    const qHtml = (l.quiz || []).map((q, i) => '<div class="q"><div class="qlabel">' + (i + 1) + '. ' + esc(q.question) + '</div><div class="choices" data-choice="' + q.id + '">' + (q.options || []).map((o, oi) => '<label><input type="radio" name="q_' + q.id + '" value="' + oi + '"> ' + esc(o) + '</label>').join('') + '</div></div>').join('');
+    staffLayout(
+      '<a href="#/" class="btn btn-ghost btn-sm">← Back</a>' +
+      '<div class="panel" style="margin-top:1rem"><div class="wizard-kind">Lesson</div><h2>' + esc(l.title) + '</h2><p class="muted">' + esc(l.intro || '') + '</p>' + sections +
+      '<hr style="border:none;border-top:1px solid var(--line);margin:1.3rem 0"><h3 style="margin:0">Quick quiz</h3><p class="muted" style="font-size:.85rem;margin:.2rem 0 0">Get ' + Math.round((l.passMark || 0.7) * 100) + '% or better to pass — it ticks the competency on your record.</p>' +
+      qHtml + '<div id="lqErr"></div><button class="btn btn-primary btn-block btn-lg" id="lqSubmit">Submit answers</button></div>');
+    root().querySelectorAll('[data-choice] input').forEach((inp) => { inp.onchange = () => { ans[inp.name.slice(2)] = inp.value; inp.closest('[data-choice]').querySelectorAll('label').forEach((x) => x.classList.remove('sel')); inp.closest('label').classList.add('sel'); }; });
+    $('#lqSubmit').onclick = async () => {
+      const btn = $('#lqSubmit'); btn.disabled = true; btn.textContent = 'Marking…';
+      try {
+        const r = await api('POST', '/me/lessons/' + lessonId + '/submit', { answers: ans });
+        const msg = r.passed
+          ? '<div style="font-size:3rem">🎉</div><h2>Passed! ' + r.correct + '/' + r.total + '</h2>' + (r.signed ? '<p class="muted">You\'ve been signed off on <strong>' + esc(r.signed) + '</strong> — it\'s on your training record now.</p>' : '<p class="muted">Nice work.</p>')
+          : '<div style="font-size:3rem">📚</div><h2>' + r.correct + '/' + r.total + ' — not quite there</h2><p class="muted">Have another read and give it another go.</p>';
+        staffLayout('<div class="panel" style="text-align:center;padding:2.5rem 1.5rem">' + msg + '<a href="#/" class="btn btn-primary" style="margin-top:1.2rem">Back to your portal</a></div>');
+      } catch (e) { $('#lqErr').innerHTML = '<div class="error-msg">' + esc(e.message) + '</div>'; btn.disabled = false; btn.textContent = 'Submit answers'; }
+    };
+  }
+
+  async function openLessonAssign(employeeId) {
+    const ls = await getLessons();
+    const opts = ls.map((l) => '<button class="choice makelesson" data-l="' + l.id + '" style="margin-bottom:.4rem">' + esc(l.title) + '<span class="note">' + esc(l.blurb || '') + (l.competencyLabel ? ' · signs off: ' + esc(l.competencyLabel) : '') + '</span></button>').join('');
+    openModal('<h2>Assign a lesson</h2><p class="muted">They\'ll get it in their portal to read and sit the quiz. Passing ticks the competency automatically.</p>' + opts + '<div class="modal-foot"><button class="btn btn-ghost" id="lCancel">Cancel</button></div>');
+    $('#lCancel').onclick = closeModal;
+    root().querySelectorAll('.makelesson').forEach((b) => { b.onclick = async () => { await api('POST', '/employees/' + employeeId + '/lessons', { lesson_id: b.getAttribute('data-l') }); closeModal(); toast('Lesson assigned'); viewMember(employeeId); }; });
+  }
+
   // ---------------- router ----------------
   async function routeChanged() {
     const hash = location.hash || '#/';
@@ -1145,6 +1190,7 @@
       }
       if (State.me.role === 'staff') {
         if (hash.indexOf('#/checkin/') === 0) return await viewStaffCheckin(hash.split('/')[2]);
+        if (hash.indexOf('#/lesson/') === 0) return await viewStaffLesson(hash.split('/')[2]);
         return await viewStaffHome();
       }
       if (hash.indexOf('#/case/') === 0) return await viewCase(hash.split('/')[2]);
