@@ -1039,7 +1039,7 @@
 
   async function viewMember(id) {
     const e = await api('GET', '/employees/' + id);
-    const [mPlans, mWorklog] = await Promise.all([api('GET', '/employees/' + id + '/plans'), api('GET', '/employees/' + id + '/worklog')]);
+    const [mPlans, mWorklog, mAllowances] = await Promise.all([api('GET', '/employees/' + id + '/plans'), api('GET', '/employees/' + id + '/worklog'), api('GET', '/employees/' + id + '/allowances').catch(() => [])]);
     e.development = e.development || {};
     e.development.goals = e.development.goals || [];
     e.development.skills = e.development.skills || {};
@@ -1159,6 +1159,19 @@
     const planSection = '<div class="section-title" style="margin-top:1.8rem"><h3>📅 Plan &amp; work log</h3><button class="btn btn-ghost btn-sm" id="assignPlan">+ Set a plan</button></div>' + planList +
       '<div style="margin-top:1rem"><div class="muted" style="font-weight:700;font-size:.82rem;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.4rem">Recent work logged</div>' + wlSummary + '</div>';
 
+    // 💵 allowances & loadings (top-ups, not reclassification)
+    const allowList = mAllowances || [];
+    const hrSum = allowList.filter((a) => a.basis === 'hour').reduce((s, a) => s + (a.amount || 0), 0);
+    const wkSum = allowList.filter((a) => a.basis === 'week').reduce((s, a) => s + (a.amount || 0), 0);
+    const baseRate = e.pay_rate || 0;
+    const allUp = baseRate + hrSum + (wkSum / 38);
+    const allowRows = allowList.map((a) => '<div class="row" style="cursor:default"><span class="ic-circle">💵</span><span class="grow"><span class="t">' + esc(a.name) + '</span>' + (a.note ? '<span class="s">' + esc(a.note) + '</span>' : '') + '</span><span class="meta"><strong>+' + money(a.amount) + '/' + (a.basis === 'week' ? 'wk' : a.basis === 'shift' ? 'shift' : 'hr') + '</strong> <button class="btn btn-ghost btn-sm allow-del" data-id="' + a.id + '">✕</button></span></div>').join('');
+    const allowancesSection = '<div class="section-title" style="margin-top:1.8rem"><h3>💵 Allowances &amp; loadings</h3><button class="btn btn-ghost btn-sm" id="addAllow">+ Add allowance</button></div>' +
+      '<p class="muted" style="font-size:.88rem;margin-top:-.3rem">Top-ups for extra responsibility (like training new starters) — paid on top of their level, no reclassification needed.</p>' +
+      (allowList.length
+        ? '<div class="card card-pad"><div style="display:flex;justify-content:space-between;padding:.2rem 0;border-bottom:1px dashed var(--line)"><span class="muted">Base rate</span><strong>' + (baseRate ? money(baseRate) + '/hr' : '—') + '</strong></div><div class="row-list" style="margin:.4rem 0">' + allowRows + '</div><div style="display:flex;justify-content:space-between;padding-top:.5rem;border-top:2px solid var(--line)"><strong>All up' + (wkSum ? ' (weekly ÷38h)' : '') + '</strong><strong style="font-family:var(--font-head);font-size:1.1rem;color:var(--positive-700)">≈ ' + money(allUp) + '/hr</strong></div></div>'
+        : '<div class="muted">No allowances yet. Add one for someone who takes on extra — like training new starters.</div>');
+
     // 📅 lifecycle plan
     const firstName = (e.name || '').split(' ')[0];
     const sched = (e.schedule || []).filter((m) => !m.done);
@@ -1172,7 +1185,7 @@
 
     layout('team', e.name,
       header + scheduleSection +
-      '<div class="section-title" style="margin-top:1.8rem"><h3>💰 Pay & progression ' + refChip('pay', 'award classification minimum wage pay slip records', 'Pay, awards &amp; records') + '</h3></div>' + wagePanel +
+      '<div class="section-title" style="margin-top:1.8rem"><h3>💰 Pay & progression ' + refChip('pay', 'award classification minimum wage pay slip records', 'Pay, awards &amp; records') + '</h3></div>' + wagePanel + allowancesSection +
       '<div class="section-title" style="margin-top:1.8rem"><h3>🚀 Development</h3></div>' + devPanel +
       lessonsSection + planSection +
       '<div class="section-title" style="margin-top:1.8rem"><h3>📝 Notes & observations</h3></div>' + notesList + noteForm +
@@ -1214,6 +1227,8 @@
     const wbb = $('#wellbeingBtn'); if (wbb) wbb.onclick = () => openReferEap(e);
     const al = $('#assignLesson'); if (al) al.onclick = () => openLessonAssign(e.id);
     const ap = $('#assignPlan'); if (ap) ap.onclick = () => openPlanModal(e.id);
+    const aa = $('#addAllow'); if (aa) aa.onclick = () => openAllowanceAdd(e.id);
+    root().querySelectorAll('.allow-del').forEach((b) => { b.onclick = async () => { await api('DELETE', '/allowances/' + b.getAttribute('data-id')); viewMember(e.id); }; });
     root().querySelectorAll('.moment-done').forEach((b) => { b.onclick = async () => { await api('POST', '/lifecycle/done', { employee_id: e.id, rule_id: b.dataset.r, occurrence_key: b.dataset.k }); viewMember(e.id); }; });
     root().querySelectorAll('.moment-do').forEach((b) => { b.onclick = () => { const m = (e.schedule || []).find((x) => x.rule_id === b.dataset.r && x.occurrence_key === b.dataset.k); if (m) doMoment(e, m); }; });
   }
@@ -1690,6 +1705,21 @@
       await api('POST', '/employees/' + employeeId + '/plans', { period: $('#plPeriod').value, plan_date: $('#plDate').value, title: $('#plTitle').value.trim(), items: items, note: $('#plNote').value.trim() });
       closeModal(); toast('Plan sent'); viewMember(employeeId);
     };
+  }
+
+  async function openAllowanceAdd(employeeId) {
+    const kit = await api('GET', '/allowance-kit');
+    const chip = (a) => '<button type="button" class="log-chip allow-pick" data-name="' + esc(a.name) + '" data-amt="' + a.amount + '" data-basis="' + a.basis + '" data-note="' + esc(a.note || '') + '">' + esc(a.name) + ' <span class="cu">+$' + a.amount + '/' + (a.basis === 'week' ? 'wk' : 'hr') + '</span></button>';
+    openModal('<h2>Add an allowance</h2><p class="muted">' + esc(kit.intro || '') + '</p>' +
+      '<div class="alabel">Award allowances</div><div class="chip-grid">' + (kit.award || []).map(chip).join('') + '</div>' +
+      '<div class="alabel" style="margin-top:.7rem">Or a top-up of your own</div><div class="chip-grid">' + (kit.suggestions || []).map(chip).join('') + '</div>' +
+      '<div class="field" style="margin-top:1rem"><label>Name</label><input id="alName" placeholder="e.g. Training allowance"></div>' +
+      '<div class="grid grid-2"><div class="field"><label>Amount $</label><input type="number" id="alAmt" step="0.01" inputmode="decimal" placeholder="e.g. 2.50"></div><div class="field"><label>Per</label><select id="alBasis"><option value="hour">hour</option><option value="week">week</option><option value="shift">shift</option></select></div></div>' +
+      '<div class="field"><label>Note (optional)</label><input id="alNote" placeholder="What it\'s for"></div>' +
+      '<div class="modal-foot"><button class="btn btn-ghost" id="alCancel">Cancel</button><button class="btn btn-primary" id="alSave">Add allowance</button></div>');
+    root().querySelectorAll('.allow-pick').forEach((b) => { b.onclick = () => { $('#alName').value = b.getAttribute('data-name'); $('#alAmt').value = b.getAttribute('data-amt'); $('#alBasis').value = b.getAttribute('data-basis'); $('#alNote').value = b.getAttribute('data-note'); }; });
+    $('#alCancel').onclick = closeModal;
+    $('#alSave').onclick = async () => { const name = $('#alName').value.trim(); if (!name) { toast('A name is needed', 'error'); return; } await api('POST', '/employees/' + employeeId + '/allowances', { name: name, amount: $('#alAmt').value, basis: $('#alBasis').value, note: $('#alNote').value.trim() }); closeModal(); toast('Allowance added'); viewMember(employeeId); };
   }
 
   async function openLessonAssign(employeeId) {

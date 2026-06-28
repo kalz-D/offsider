@@ -28,6 +28,7 @@ const suggestionKit = require('./content/suggestionKit');
 const legalRefs = require('./content/legalRefs');
 const managerAcademy = require('./content/managerAcademy');
 const wellbeingKit = require('./content/wellbeingKit');
+const allowanceKit = require('./content/allowances');
 const nodemailer = require('nodemailer');
 
 // Email sending is OFF until SMTP creds are set in the environment (SMTP_HOST/USER/PASS).
@@ -1120,6 +1121,28 @@ app.post('/api/pay-scale/suggest', h(async (req, res) => {
     created++;
   }
   res.json({ ok: true, created });
+}));
+
+// ---------- allowances & loadings (top-ups, not reclassification) ----------
+app.get('/api/allowance-kit', (req, res) => res.json(allowanceKit));
+app.get('/api/employees/:id/allowances', h(async (req, res) => {
+  const e = await db.prepare('SELECT id FROM employees WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!e) return res.status(404).json({ error: 'Not found' });
+  res.json(await db.prepare('SELECT * FROM allowances WHERE employee_id=? ORDER BY created_at').all(e.id));
+}));
+app.post('/api/employees/:id/allowances', h(async (req, res) => {
+  const e = await db.prepare('SELECT id FROM employees WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!e) return res.status(404).json({ error: 'Not found' });
+  const b = req.body || {};
+  if (!b.name || !String(b.name).trim()) return res.status(400).json({ error: 'A name is needed.' });
+  const id = uid();
+  await db.prepare('INSERT INTO allowances (id, business_id, employee_id, name, amount, basis, note, created_at) VALUES (?,?,?,?,?,?,?,?)')
+    .run(id, req.business.id, e.id, String(b.name).trim(), (b.amount != null && b.amount !== '') ? Number(b.amount) : 0, b.basis || 'hour', b.note || null, now());
+  res.json({ ok: true, id });
+}));
+app.delete('/api/allowances/:id', h(async (req, res) => {
+  await db.prepare('DELETE FROM allowances WHERE id=? AND business_id=?').run(req.params.id, req.business.id);
+  res.json({ ok: true });
 }));
 
 // ---------- references (recruitment) ----------

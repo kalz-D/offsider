@@ -155,6 +155,9 @@ const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS business_files (
     id TEXT PRIMARY KEY, business_id TEXT NOT NULL, kind TEXT, name TEXT, mime TEXT, data TEXT, created_by TEXT, created_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS allowances (
+    id TEXT PRIMARY KEY, business_id TEXT NOT NULL, employee_id TEXT NOT NULL, name TEXT, amount REAL, basis TEXT, note TEXT, created_at TEXT NOT NULL
+  );
   CREATE INDEX IF NOT EXISTS idx_users_business ON users(business_id);
   CREATE INDEX IF NOT EXISTS idx_emp_business   ON employees(business_id);
   CREATE INDEX IF NOT EXISTS idx_cases_business ON cases(business_id);
