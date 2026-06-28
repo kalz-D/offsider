@@ -53,6 +53,7 @@
   async function getLessons() { if (!State.lessons) State.lessons = await api('GET', '/lessons'); return State.lessons; }
   async function getAppKit() { if (!State.appKit) State.appKit = await api('GET', '/app-kit'); return State.appKit; }
   async function getLegalRefs() { if (!State.legalRefs) State.legalRefs = await api('GET', '/legal-refs'); return State.legalRefs; }
+  function fileToB64(file) { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = rej; r.readAsDataURL(file); }); }
 
   // ---- notifications (shared by managers + staff) ----
   function bellHtml() { return '<button class="bell" id="notifBell" title="Notifications">🔔<span class="notif-dot" id="notifDot" style="display:none"></span></button>'; }
@@ -844,12 +845,19 @@
   function statusBadge(s) { const m = CAND_STATUS[s] || { label: s, cls: '' }; return '<span class="badge ' + m.cls + '">' + esc(m.label) + '</span>'; }
 
   async function viewHiring() {
-    const cands = await api('GET', '/candidates');
+    const [cands, contracts, emailStatus] = await Promise.all([api('GET', '/candidates'), api('GET', '/files?kind=contract').catch(() => []), api('GET', '/email-status').catch(() => ({ configured: false }))]);
     const closedSet = { hired: 1, rejected: 1, declined: 1 };
     const active = cands.filter((c) => !closedSet[c.status]);
     const done = cands.filter((c) => closedSet[c.status]);
+    const contract = (contracts && contracts.length) ? contracts[0] : null;
     const row = (c) => '<a href="#/candidate/' + c.id + '" class="row"><span class="ic-circle">🧑‍💼</span><span class="grow"><span class="t">' + esc(c.name) + '</span><span class="s">' + esc(c.role_applied || 'Role TBC') + (c.phone ? ' · ' + esc(c.phone) : '') + '</span></span><span class="meta">' + statusBadge(c.status) + '</span></a>';
-    const body =
+    const setupPanel = '<details class="panel" style="margin-bottom:1.2rem"><summary style="cursor:pointer;font-weight:700">⚙️ Hiring set-up — contract &amp; email</summary><div style="margin-top:.9rem">' +
+      '<strong>Employment contract</strong><div class="muted" style="font-size:.88rem;margin:.2rem 0 .5rem">Upload your standard contract once. It can be attached to offers and downloaded any time.</div>' +
+      (contract ? '<div class="link-box"><code>📄 ' + esc(contract.name) + '</code><a href="/api/files/' + contract.id + '/download" target="_blank" class="btn btn-ghost btn-sm">View</a><button class="btn btn-ghost btn-sm" id="delContract">Remove</button></div>' : '') +
+      '<label class="btn btn-ghost btn-sm" style="margin-top:.4rem;cursor:pointer">' + (contract ? '↻ Replace contract' : '⬆ Upload contract') + '<input type="file" id="contractFile" accept=".pdf,.doc,.docx" style="display:none"></label>' +
+      '<div style="margin-top:1rem"><strong>Sending offers by email</strong><div class="muted" style="font-size:.88rem;margin-top:.2rem">' + (emailStatus.configured ? '✅ Connected as <strong>' + esc(emailStatus.from) + '</strong> — you can send offers straight from the app.' : '✉️ Not connected yet — offers are copy-and-paste for now. Add your email’s SMTP details (env vars) to switch on one-click send.') + '</div></div>' +
+      '</div></details>';
+    const body = setupPanel +
       '<div class="section-title"><h3>Hiring pipeline</h3><button class="btn btn-primary btn-sm" id="addCand">+ Add a candidate</button></div>' +
       '<p class="muted" style="max-width:64ch;margin-top:-.3rem">From first application to first day. Add a candidate, send them a quick form, run a fair interview, make an offer — and when they accept, turn them into a worker with onboarding ready to go.</p>' +
       (active.length ? '<div class="row-list">' + active.map(row).join('') + '</div>'
@@ -858,6 +866,8 @@
     layout('hiring', 'Hiring', body);
     const a = $('#addCand'); if (a) a.onclick = openAddCandidate;
     const a2 = $('#addCand2'); if (a2) a2.onclick = openAddCandidate;
+    const cf = $('#contractFile'); if (cf) cf.onchange = async (e) => { const file = e.target.files[0]; if (!file) return; if (file.size > 4 * 1024 * 1024) { toast('File too big (max ~4MB)', 'error'); return; } toast('Uploading…'); const data = await fileToB64(file); await api('POST', '/files', { kind: 'contract', name: file.name, mime: file.type || 'application/octet-stream', data: data }); toast('Contract saved'); viewHiring(); };
+    const dc = $('#delContract'); if (dc) dc.onclick = async () => { await api('DELETE', '/files/' + contract.id); toast('Removed'); viewHiring(); };
   }
 
   async function openAddCandidate() {
@@ -1004,14 +1014,26 @@
     $('#oSave').onclick = async () => {
       const r = await api('POST', '/candidates/' + c.id + '/offer', { rate: $('#oRate').value.trim(), pay_basis: $('#oBasis').value, start_date: $('#oStart').value, employment_type: $('#oType').value, message: $('#oMsg').value.trim() });
       const acceptLink = location.origin + r.acceptPath;
-      openModal('<h2>Offer ready ✉️</h2><p class="muted">Copy this into an email to ' + esc(c.name.split(' ')[0]) + '. They can accept on their own link — you\'ll see it update here.</p>' +
-        '<div class="field"><label>Subject</label><input id="oSubj" value="' + esc(r.subject) + '" readonly></div>' +
-        '<div class="field"><label>Message</label><textarea rows="11" readonly>' + esc(r.body) + '</textarea></div>' +
+      const [emailStatus, contracts] = await Promise.all([api('GET', '/email-status').catch(() => ({ configured: false })), api('GET', '/files?kind=contract').catch(() => [])]);
+      const contract = (contracts && contracts.length) ? contracts[0] : null;
+      const canSend = !!c.email;
+      openModal('<h2>Offer ready ✉️</h2><p class="muted">' + (canSend && emailStatus.configured ? 'Send it straight to ' + esc(c.email) + ', or copy it.' : 'Copy this into an email to ' + esc(c.name.split(' ')[0]) + '.') + ' They accept on their own link — you\'ll see it update here.</p>' +
+        '<div class="field"><label>Subject</label><input value="' + esc(r.subject) + '" readonly></div>' +
+        '<div class="field"><label>Message</label><textarea rows="10" readonly>' + esc(r.body) + '</textarea></div>' +
+        (contract ? '<label class="check-item" style="margin:.2rem 0 .8rem"><input type="checkbox" id="oAttach" checked><span><span class="ci-label">📎 Attach our employment contract</span><br><span class="ci-help">' + esc(contract.name) + '</span></span></label>' : '') +
         '<div class="field"><label>Their accept link</label><div class="link-box"><code>' + esc(acceptLink) + '</code><button class="btn btn-ghost btn-sm" id="copyAccept">Copy</button></div></div>' +
-        '<div class="modal-foot"><button class="btn btn-ghost" id="oClose">Close</button><button class="btn btn-primary" id="copyBody">Copy email</button></div>');
+        (canSend ? '' : '<div class="muted" style="font-size:.85rem;margin-bottom:.6rem">No email on file for ' + esc(c.name.split(' ')[0]) + ' — add one on their profile to send directly.</div>') +
+        '<div class="modal-foot"><button class="btn btn-ghost" id="oClose">Close</button><button class="btn btn-ghost" id="copyBody">Copy</button>' + (canSend ? '<button class="btn btn-primary" id="sendEmail">✉️ Send to ' + esc(c.email) + '</button>' : '') + '</div>');
       $('#copyBody').onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(r.subject + '\n\n' + r.body); toast('Offer email copied'); };
       $('#copyAccept').onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(acceptLink); toast('Accept link copied'); };
       $('#oClose').onclick = () => { closeModal(); viewCandidate(c.id); };
+      const se = $('#sendEmail'); if (se) se.onclick = async () => {
+        se.disabled = true; se.textContent = 'Sending…';
+        const att = $('#oAttach') ? $('#oAttach').checked : false;
+        const res = await api('POST', '/candidates/' + c.id + '/send-offer', { subject: r.subject, body: r.body, attachContract: att });
+        if (res.sent) { toast('Sent to ' + res.to + ' 📨'); closeModal(); viewCandidate(c.id); }
+        else { se.disabled = false; se.textContent = '✉️ Send to ' + c.email; toast(res.reason === 'not_configured' ? 'Email isn\'t connected yet — copy it for now' : ('Couldn\'t send — ' + (res.error || res.reason || 'try copy/paste')), 'error'); }
+      };
     };
   }
 
@@ -1277,15 +1299,47 @@
       '<p class="muted" style="font-size:.9rem;margin:.3rem 0 ' + (anyInternal ? '0' : '.7rem') + '">The award is the <em>legal minimum</em> — the floor. Your internal levels are what you actually pay, set at or above it (most businesses pay well above). ' + (aw ? 'Floor shown is ' + esc(aw.code) + ', the minimums from ' + esc((aw.effective || '').replace(/-/g, '/')) + '. ' + refChip('pay', 'award classification minimum wage pay records', 'Award minimums & paying above') : '') + '</p>' +
       (anyInternal ? '' : '<button class="btn btn-primary btn-sm" id="suggestScale">Start me a scale (award + 20%)</button>') + '</div>';
 
+    const posCard = (p) => {
+      const floor = p.award_hourly, below = floor != null && p.rate != null && p.rate < floor - 0.001;
+      const margin = (floor != null && p.rate != null) ? (below ? ' · <span style="color:var(--watch);font-weight:700">⚠ below the floor</span>' : ' · <span style="color:var(--positive-700)">✓ ' + money(p.rate - floor) + ' above</span>') : '';
+      return '<div class="card card-pad" style="margin-bottom:.6rem"><div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start"><div class="grow"><strong>' + esc(p.title) + '</strong>' + (p.rate != null ? ' &nbsp;<strong style="font-family:var(--font-head)">' + money(p.rate) + (p.range_max ? '–' + money(p.range_max) : '') + '/hr</strong>' : '') +
+        '<div class="muted" style="font-size:.85rem;margin-top:.2rem">' + (p.award_code ? 'Award floor: ' + esc(p.award_code) + (floor != null ? ' · ' + money(floor) + '/hr' : '') : 'No award floor set yet') + margin + '</div>' + (p.note ? '<div class="muted" style="font-size:.85rem;margin-top:.15rem">' + esc(p.note) + '</div>' : '') + '</div><button class="btn btn-ghost btn-sm pos-edit" data-id="' + p.id + '">edit</button></div></div>';
+    };
+    const positionsSection = '<div class="section-title" style="margin-top:1.8rem"><h3>🏷️ Your own positions &amp; titles</h3><button class="btn btn-primary btn-sm" id="addPos">+ Add a position</button></div>' +
+      '<p class="muted" style="max-width:66ch;margin-top:-.3rem">Invent any title that suits your business — “Training Supervisor”, “2IC”, “Lead Hand”. Anchor each to the award classification whose <em>actual duties</em> match the work — that sets the legal floor — then pay above it. The title is yours; the floor keeps you compliant. ' + refChip('pay', 'classification award duties minimum wage', 'How titles map to the award') + '</p>' +
+      ((payScale.positions && payScale.positions.length) ? payScale.positions.map(posCard).join('') : '<div class="muted">None yet — add internal titles like a Training Supervisor or 2IC.</div>');
+
     layout('career', 'Career paths',
       '<div class="banner" style="background:var(--brand-50);border-color:transparent"><span style="font-size:1.6rem">' + pack.icon + '</span><div class="grow"><strong>' + esc(pack.name) + ' — ' + esc(pack.pathway.name) + '</strong><div class="muted" style="font-size:.9rem">' + esc(pack.blurb) + '</div></div><button class="btn btn-ghost btn-sm" id="changeInd">Change</button></div>' +
       payIntro +
       '<div class="grid grid-2" style="align-items:start"><div><div class="section-title"><h3>The ladder &amp; pay</h3></div><div class="ladder">' + ladder + '</div></div>' +
-      '<div><div class="section-title"><h3>🎫 Tickets to chase</h3></div>' + (tickets || '<div class="muted">—</div>') + '</div></div>');
+      '<div><div class="section-title"><h3>🎫 Tickets to chase</h3></div>' + (tickets || '<div class="muted">—</div>') + '</div></div>' +
+      positionsSection);
     const ci = $('#changeInd');
     if (ci) ci.onclick = async () => { await api('PATCH', '/business', { industry_id: null }); State.me.business.industry_id = null; viewCareer(); };
     const ss = $('#suggestScale'); if (ss) ss.onclick = async () => { await api('POST', '/pay-scale/suggest', { margin: 0.2 }); toast('Starter scale added — tweak any rung'); viewCareer(); };
     root().querySelectorAll('.rung-edit').forEach((b) => { b.onclick = () => openPayLevelEdit(payMap[b.getAttribute('data-r')]); });
+    const ap = $('#addPos'); if (ap) ap.onclick = () => openPositionEdit(null, payScale.awardLevels);
+    root().querySelectorAll('.pos-edit').forEach((b) => { b.onclick = () => openPositionEdit((payScale.positions || []).find((p) => p.id === b.getAttribute('data-id')), payScale.awardLevels); });
+  }
+  function openPositionEdit(pos, awardLevels) {
+    pos = pos || {};
+    awardLevels = awardLevels || [];
+    const floorOf = (code) => { const l = awardLevels.find((x) => x.id === code); return l ? l.hourly : null; };
+    const opts = '<option value="">— pick the matching level —</option>' + awardLevels.map((l) => '<option value="' + l.id + '"' + (pos.award_code === l.id ? ' selected' : '') + '>' + esc(l.name) + ' ($' + l.hourly + '/hr floor)</option>').join('');
+    openModal('<h2>' + (pos.id ? 'Edit position' : 'New internal position') + '</h2>' +
+      '<p class="muted">Name it whatever suits, then anchor it to the award level whose <em>duties</em> match the real work — that\'s the legal floor.</p>' +
+      '<div class="field"><label>Title *</label><input id="poTitle" value="' + esc(pos.title || '') + '" placeholder="e.g. Training Supervisor"></div>' +
+      '<div class="field"><label>Award classification it sits at (the floor)</label><select id="poAward">' + opts + '</select><div class="hint" id="poFloor"></div></div>' +
+      '<div class="grid grid-2"><div class="field"><label>Rate $/hr</label><input type="number" id="poRate" step="0.50" inputmode="decimal" value="' + (pos.rate != null ? pos.rate : '') + '"></div><div class="field"><label>Top of band (optional)</label><input type="number" id="poMax" step="0.50" inputmode="decimal" value="' + (pos.range_max != null ? pos.range_max : '') + '"></div></div>' +
+      '<div class="field"><label>What this role actually does (optional)</label><input id="poNote" value="' + esc(pos.note || '') + '" placeholder="e.g. Runs all inductions and training, coordinates the crew\'s upskilling"></div>' +
+      '<div id="poWarn"></div>' +
+      '<div class="modal-foot">' + (pos.id ? '<button class="btn btn-ghost" id="poDel">Remove</button>' : '<button class="btn btn-ghost" id="poCancel">Cancel</button>') + '<button class="btn btn-primary" id="poSave">Save</button></div>');
+    const warn = () => { const fl = floorOf($('#poAward').value); const v = parseFloat($('#poRate').value); const w = $('#poWarn'); $('#poFloor').textContent = fl != null ? 'Floor for that level: ' + money(fl) + '/hr' : ''; if (!isNaN(v) && fl != null) { w.innerHTML = v < fl ? '<div class="error-msg">⚠ Below the award floor (' + money(fl) + '/hr) for that classification.</div>' : '<div class="ok-msg">✓ ' + money(v - fl) + '/hr above the floor.</div>'; } else { w.innerHTML = ''; } };
+    $('#poAward').onchange = warn; $('#poRate').oninput = warn; warn();
+    $('#poSave').onclick = async () => { const t = $('#poTitle').value.trim(); if (!t) { toast('A title is needed', 'error'); return; } const payload = { title: t, award_code: $('#poAward').value || null, rate: $('#poRate').value, range_max: $('#poMax').value, note: $('#poNote').value.trim() }; if (pos.id) await api('PATCH', '/positions/' + pos.id, payload); else await api('POST', '/positions', payload); closeModal(); toast('Saved'); viewCareer(); };
+    const del = $('#poDel'); if (del) del.onclick = async () => { await api('DELETE', '/positions/' + pos.id); closeModal(); toast('Removed'); viewCareer(); };
+    const cancel = $('#poCancel'); if (cancel) cancel.onclick = closeModal;
   }
   function openPayLevelEdit(role) {
     if (!role) return;

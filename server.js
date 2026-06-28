@@ -28,6 +28,27 @@ const suggestionKit = require('./content/suggestionKit');
 const legalRefs = require('./content/legalRefs');
 const managerAcademy = require('./content/managerAcademy');
 const wellbeingKit = require('./content/wellbeingKit');
+const nodemailer = require('nodemailer');
+
+// Email sending is OFF until SMTP creds are set in the environment (SMTP_HOST/USER/PASS).
+// Works with any SMTP — a Google Workspace/Gmail app password, Microsoft 365, or a provider.
+const MAIL = { configured: !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS), from: process.env.SMTP_FROM || process.env.SMTP_USER || '' };
+let mailTransport = null;
+function getTransport() {
+  if (!MAIL.configured) return null;
+  if (!mailTransport) mailTransport = nodemailer.createTransport({
+    host: process.env.SMTP_HOST, port: Number(process.env.SMTP_PORT) || 587,
+    secure: String(process.env.SMTP_SECURE) === 'true' || Number(process.env.SMTP_PORT) === 465,
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+  });
+  return mailTransport;
+}
+async function sendEmail({ to, subject, text, attachments }) {
+  const t = getTransport();
+  if (!t) return { sent: false, reason: 'not_configured' };
+  try { await t.sendMail({ from: MAIL.from, to, subject, text, attachments: attachments || [] }); return { sent: true }; }
+  catch (e) { console.error('email send failed:', e.message); return { sent: false, reason: 'send_failed', error: e.message }; }
+}
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -395,6 +416,7 @@ app.post('/api/me/lessons/:lessonId/submit', h(async (req, res) => {
 // ---------- shared (any logged-in user): app kit + legal refs + notifications ----------
 app.get('/api/app-kit', (req, res) => res.json({ worklog: worklogKit, leaveTypes: leaveTypes.types || [], leaveTip: leaveTypes.tip || '', suggestions: suggestionKit }));
 app.get('/api/legal-refs', (req, res) => res.json(legalRefs));
+app.get('/api/email-status', (req, res) => res.json({ configured: MAIL.configured, from: MAIL.from }));
 app.get('/api/wellbeing', h(async (req, res) => {
   const st = await db.prepare('SELECT * FROM business_settings WHERE business_id = ?').get(req.business.id);
   const eap = (st && (st.eap_name || st.eap_phone || st.eap_url)) ? { name: st.eap_name, phone: st.eap_phone, url: st.eap_url, notes: st.eap_notes } : null;
@@ -996,7 +1018,77 @@ app.get('/api/pay-scale', h(async (req, res) => {
     const ip = byRole[r.id];
     return { role_id: r.id, title: r.title, level: r.level, award_code: r.awardLevel || null, award_name: lvl ? lvl.name : null, award_hourly: lvl ? lvl.hourly : null, internal: ip ? { name: ip.internal_name, rate: ip.rate, range_max: ip.range_max } : null };
   });
-  res.json({ roles, award: award ? { code: award.code, name: award.shortName, effective: award.effective, note: award.note, payTool: award.payTool, casualLoading: award.casualLoading } : null });
+  const posRows = await db.prepare('SELECT * FROM internal_positions WHERE business_id = ? ORDER BY created_at').all(req.business.id);
+  const positions = posRows.map((p) => { const lvl = p.award_code ? awardLevel(aId, p.award_code) : null; return { id: p.id, title: p.title, award_code: p.award_code, award_hourly: lvl ? lvl.hourly : null, rate: p.rate, range_max: p.range_max, note: p.note }; });
+  const awardLevels = award ? award.levels.map((l) => ({ id: l.id, name: l.name, hourly: l.hourly })) : [];
+  res.json({ roles, positions, awardLevels, award: award ? { code: award.code, name: award.shortName, effective: award.effective, note: award.note, payTool: award.payTool, casualLoading: award.casualLoading } : null });
+}));
+// custom internal positions (any title the business invents, anchored to an award floor)
+app.post('/api/positions', h(async (req, res) => {
+  const b = req.body || {};
+  if (!b.title || !String(b.title).trim()) return res.status(400).json({ error: 'A title is needed.' });
+  const id = uid();
+  await db.prepare('INSERT INTO internal_positions (id, business_id, title, award_code, rate, range_max, note, created_at) VALUES (?,?,?,?,?,?,?,?)')
+    .run(id, req.business.id, String(b.title).trim(), b.award_code || null, (b.rate != null && b.rate !== '') ? Number(b.rate) : null, (b.range_max != null && b.range_max !== '') ? Number(b.range_max) : null, b.note || null, now());
+  res.json({ ok: true, id });
+}));
+app.patch('/api/positions/:id', h(async (req, res) => {
+  const p = await db.prepare('SELECT * FROM internal_positions WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!p) return res.status(404).json({ error: 'Not found' });
+  const b = req.body || {};
+  const num = (v, cur) => (v == null) ? cur : (v === '' ? null : Number(v));
+  await db.prepare('UPDATE internal_positions SET title=?, award_code=?, rate=?, range_max=?, note=? WHERE id=?')
+    .run(b.title != null ? b.title : p.title, b.award_code != null ? b.award_code : p.award_code, num(b.rate, p.rate), num(b.range_max, p.range_max), b.note != null ? b.note : p.note, p.id);
+  res.json({ ok: true });
+}));
+app.delete('/api/positions/:id', h(async (req, res) => {
+  await db.prepare('DELETE FROM internal_positions WHERE id=? AND business_id=?').run(req.params.id, req.business.id);
+  res.json({ ok: true });
+}));
+
+// business files (e.g. the employment contract) — stored in the DB as base64
+app.get('/api/files', h(async (req, res) => {
+  const kind = req.query.kind;
+  const rows = kind
+    ? await db.prepare('SELECT id, kind, name, mime, created_at FROM business_files WHERE business_id=? AND kind=? ORDER BY created_at DESC').all(req.business.id, kind)
+    : await db.prepare('SELECT id, kind, name, mime, created_at FROM business_files WHERE business_id=? ORDER BY created_at DESC').all(req.business.id);
+  res.json(rows);
+}));
+app.post('/api/files', h(async (req, res) => {
+  const b = req.body || {};
+  if (!b.name || !b.data) return res.status(400).json({ error: 'No file.' });
+  const data = String(b.data).replace(/^data:[^,]*,/, '');
+  if (Math.floor(data.length * 3 / 4) > 4 * 1024 * 1024) return res.status(413).json({ error: 'File too big — keep it under about 4MB.' });
+  const id = uid();
+  await db.prepare('INSERT INTO business_files (id, business_id, kind, name, mime, data, created_by, created_at) VALUES (?,?,?,?,?,?,?,?)')
+    .run(id, req.business.id, b.kind || 'file', b.name, b.mime || 'application/octet-stream', data, req.user.id, now());
+  res.json({ ok: true, id });
+}));
+app.get('/api/files/:id/download', h(async (req, res) => {
+  const f = await db.prepare('SELECT * FROM business_files WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!f) return res.status(404).send('Not found');
+  res.setHeader('Content-Type', f.mime || 'application/octet-stream');
+  res.setHeader('Content-Disposition', 'inline; filename="' + String(f.name || 'file').replace(/[^\w.\- ]/g, '_') + '"');
+  res.send(Buffer.from(f.data, 'base64'));
+}));
+app.delete('/api/files/:id', h(async (req, res) => {
+  await db.prepare('DELETE FROM business_files WHERE id=? AND business_id=?').run(req.params.id, req.business.id);
+  res.json({ ok: true });
+}));
+
+// send an offer email (only actually sends when SMTP is configured; otherwise copy/paste stays)
+app.post('/api/candidates/:id/send-offer', h(async (req, res) => {
+  const c = await db.prepare('SELECT * FROM candidates WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  if (!c.email) return res.json({ sent: false, reason: 'no_email' });
+  const b = req.body || {};
+  const attachments = [];
+  if (b.attachContract) {
+    const f = await db.prepare("SELECT * FROM business_files WHERE business_id=? AND kind='contract' ORDER BY created_at DESC").get(req.business.id);
+    if (f) attachments.push({ filename: f.name || 'Employment contract', content: Buffer.from(f.data, 'base64'), contentType: f.mime || undefined });
+  }
+  const r = await sendEmail({ to: c.email, subject: b.subject || ('An offer from ' + req.business.name), text: b.body || '', attachments });
+  res.json(Object.assign({ to: c.email }, r));
 }));
 app.put('/api/pay-scale/:roleId', h(async (req, res) => {
   const b = req.body || {};

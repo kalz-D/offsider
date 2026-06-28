@@ -27,7 +27,10 @@ module.exports = [
       { id: 'C8', name: 'C8 — Technician (specialist)', weekly: 1189.40, hourly: 31.30, defines: 'Specialist or diagnostic technical skills; trains and checks the work of others.' },
       { id: 'C7', name: 'C7 — Senior technician / supervisor', weekly: 1221.10, hourly: 32.13, defines: 'Leads a section or technical area; coordinates work and mentors the team.' },
       { id: 'C6', name: 'C6 — Technical officer', weekly: 1283.10, hourly: 33.77, defines: 'Advanced technical officer; depth across methods with accountability for output.' },
-      { id: 'C5', name: 'C5 — Senior technical officer', weekly: 1309.50, hourly: 34.46, defines: 'Coordinates technical operations, quality systems and people across the lab.' }
+      { id: 'C5', name: 'C5 — Senior technical officer', weekly: 1309.50, hourly: 34.46, defines: 'Coordinates technical operations, quality systems and people across the lab.' },
+      { id: 'C4', name: 'C4 — Technical officer / coordinator', weekly: 1344.50, hourly: 35.38, defines: 'Engineering associate / technical officer; coordinates technical work and quality across an area.' },
+      { id: 'C3', name: 'C3 — Senior coordinator', weekly: 1415.00, hourly: 37.24, defines: 'Broad technical authority; coordinates across functions and develops others.' },
+      { id: 'C2a', name: 'C2(a) — Lead / trainer-coordinator', weekly: 1450.20, hourly: 38.16, defines: 'The award\'s level for senior lead, supervisor, trainer and coordinator roles — high responsibility without being a degree-qualified professional.' }
     ]
   }
 ];

@@ -149,6 +149,12 @@ const SCHEMA_SQL = `
     business_id TEXT NOT NULL, role_id TEXT NOT NULL, internal_name TEXT, rate REAL, range_max REAL, updated_at TEXT,
     PRIMARY KEY (business_id, role_id)
   );
+  CREATE TABLE IF NOT EXISTS internal_positions (
+    id TEXT PRIMARY KEY, business_id TEXT NOT NULL, title TEXT, award_code TEXT, rate REAL, range_max REAL, note TEXT, created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS business_files (
+    id TEXT PRIMARY KEY, business_id TEXT NOT NULL, kind TEXT, name TEXT, mime TEXT, data TEXT, created_by TEXT, created_at TEXT NOT NULL
+  );
   CREATE INDEX IF NOT EXISTS idx_users_business ON users(business_id);
   CREATE INDEX IF NOT EXISTS idx_emp_business   ON employees(business_id);
   CREATE INDEX IF NOT EXISTS idx_cases_business ON cases(business_id);
