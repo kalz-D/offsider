@@ -642,26 +642,37 @@ app.post('/api/public/job/:token/apply', h(async (req, res) => {
 }));
 
 // ---------- inbound email hook (no login; guarded by INBOUND_SECRET) ----------
-// Point an inbound-email service (CloudMailin, SendGrid Inbound, Mailgun Routes) at
-// POST /api/inbound/<businessId>?key=YOUR_SECRET and forward your Seek/Indeed application
-// emails there — each one becomes a candidate (with resume) in that business's pipeline.
+// Point an inbound-email service (CloudMailin JSON format, SendGrid Inbound, Mailgun Routes) at
+// POST /api/inbound/<businessId>?key=YOUR_SECRET (or just /api/inbound?key=... for a single business)
+// and forward your Seek/Indeed application emails there — each becomes a candidate (with resume).
+async function ingestInboundEmail(bizId, b) {
+  b = b || {};
+  const subject = b.subject || (b.headers && (b.headers.Subject || b.headers.subject)) || '';
+  const text = b.plain || b.text || b['body-plain'] || b['stripped-text'] || (b.html ? String(b.html).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : '') || '';
+  let resume = null;
+  const atts = Array.isArray(b.attachments) ? b.attachments : [];
+  if (atts.length) {
+    const a = atts.find((x) => /\.(pdf|docx?|rtf)$/i.test(x.file_name || x.filename || x.name || '') || /pdf|wordprocessing|msword|officedocument/i.test(x.content_type || x.type || '')) || atts[0];
+    if (a) resume = { name: a.file_name || a.filename || a.name || 'resume', mime: a.content_type || a.type || 'application/octet-stream', data: a.content || a.data || '' };
+  }
+  const parsed = parseApplicationEmail(subject, text);
+  const id = await createApplicantCandidate(bizId, parsed, { note: text || null, resume });
+  if (AI.configured) aiFillCandidateFromResume(bizId, id, {}).catch(() => {});
+  await notifyManagers(bizId, 'application', 'New application — ' + (parsed.name || 'New applicant'), 'Forwarded in from your job board', '#/candidate/' + id, null);
+  return id;
+}
 app.post('/api/inbound/:bizId', h(async (req, res) => {
   if (!process.env.INBOUND_SECRET || req.query.key !== process.env.INBOUND_SECRET) return res.status(403).json({ error: 'forbidden' });
   const biz = await db.prepare('SELECT id FROM businesses WHERE id = ?').get(req.params.bizId);
   if (!biz) return res.status(404).json({ error: 'unknown business' });
-  const b = req.body || {};
-  const subject = b.subject || (b.headers && (b.headers.Subject || b.headers.subject)) || '';
-  const text = b.plain || b.text || b['body-plain'] || b['stripped-text'] || '';
-  let resume = null;
-  const atts = Array.isArray(b.attachments) ? b.attachments : [];
-  if (atts.length) {
-    const a = atts.find((x) => /\.(pdf|docx?|rtf)$/i.test(x.file_name || x.filename || x.name || '')) || atts[0];
-    if (a) resume = { name: a.file_name || a.filename || a.name || 'resume', mime: a.content_type || a.type || 'application/octet-stream', data: a.content || a.data || '' };
-  }
-  const parsed = parseApplicationEmail(subject, text);
-  const id = await createApplicantCandidate(biz.id, parsed, { note: text || null, resume });
-  if (AI.configured) aiFillCandidateFromResume(biz.id, id, {}).catch(() => {});
-  await notifyManagers(biz.id, 'application', 'New application — ' + parsed.name, 'Forwarded in from your job board', '#/candidate/' + id, null);
+  const id = await ingestInboundEmail(biz.id, req.body);
+  res.json({ ok: true, id });
+}));
+app.post('/api/inbound', h(async (req, res) => {
+  if (!process.env.INBOUND_SECRET || req.query.key !== process.env.INBOUND_SECRET) return res.status(403).json({ error: 'forbidden' });
+  const bizId = await resolveInboxBiz();
+  if (!bizId) return res.status(400).json({ error: 'add your business id to the URL: /api/inbound/<businessId>' });
+  const id = await ingestInboundEmail(bizId, req.body);
   res.json({ ok: true, id });
 }));
 
@@ -791,7 +802,11 @@ app.get('/api/legal-refs', (req, res) => res.json(legalRefs));
 app.get('/api/email-status', (req, res) => res.json({ configured: MAIL.configured, from: MAIL.from }));
 app.get('/api/sms-status', (req, res) => res.json({ configured: SMS.configured, provider: SMS.provider }));
 app.get('/api/ai-status', (req, res) => res.json({ configured: AI.configured, model: AI.model }));
-app.get('/api/inbox-status', (req, res) => res.json({ configured: INBOX.configured, user: INBOX.user, host: INBOX.host }));
+app.get('/api/inbox-status', (req, res) => res.json({
+  configured: INBOX.configured, user: INBOX.user, host: INBOX.host,
+  webhookReady: !!process.env.INBOUND_SECRET,
+  webhookUrl: process.env.INBOUND_SECRET ? ('https://' + req.get('host') + '/api/inbound/' + req.business.id + '?key=' + process.env.INBOUND_SECRET) : null
+}));
 // Manually pull new application emails from the resume inbox right now (also runs on the cron).
 app.post('/api/inbox/check', h(async (req, res) => {
   if (!INBOX.configured) return res.json({ ok: false, reason: 'not_configured' });

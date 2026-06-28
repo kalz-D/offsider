@@ -872,13 +872,12 @@
       '<div style="margin-top:1rem"><strong>Texting (SMS)</strong><div class="muted" style="font-size:.88rem;margin-top:.2rem">' + (smsStatus.configured ? '✅ Connected via <strong>' + esc(smsStatus.provider) + '</strong> — you can text application forms, reference requests and offer links.' : '📱 Not connected. Sign up for <strong>ClickSend</strong> (Aussie, simplest) or <strong>Twilio</strong>, then add the API keys as env vars and the “Text” buttons go live. Texts go out as your business name.') + '</div>' +
       (smsStatus.configured ? '<div style="display:flex;gap:.4rem;margin-top:.55rem;flex-wrap:wrap;align-items:center"><input id="smsTestTo" type="tel" placeholder="Your mobile, e.g. 0412 345 678" style="flex:1;min-width:12rem;padding:.45rem .6rem;border:1.5px solid var(--line-strong);border-radius:var(--r);font:inherit"><button class="btn btn-primary btn-sm" id="smsTestBtn">Send test text</button><button class="btn btn-ghost btn-sm" id="smsCheckBtn">Check connection</button></div><div class="muted" style="font-size:.84rem;margin-top:.35rem">Text yourself to confirm it works. If it says “sent” but nothing arrives, tap <strong>Check connection</strong> — or try <a href="#" id="smsTestPlain">sending without your sender name</a> (Aussie carriers often block letter-based sender names).</div><div id="smsTestMsg" class="muted" style="font-size:.84rem;margin-top:.3rem"></div>' : '') +
       '</div>' +
-      '<div style="margin-top:1rem"><strong>Auto-import from a resume inbox</strong><div class="muted" style="font-size:.88rem;margin-top:.2rem">' +
-      (inboxStatus.configured
-        ? '✅ Reading <strong>' + esc(inboxStatus.user) + '</strong>. Application emails (with resumes) that land here drop into your pipeline automatically, and the AI fills out their details + a quick summary. Forward your Seek/Indeed application emails here, or point your job-board notifications at it.'
-        : '📥 Not on yet. Connect a dedicated inbox and forward your Seek/Indeed application emails there — each becomes a candidate automatically. <strong>Easiest:</strong> a new Gmail with an app password (personal Outlook.com inboxes can’t be read this way — Microsoft now blocks password access). Ask me to switch it on.') +
-      '</div>' +
-      (inboxStatus.configured ? '<div style="margin-top:.5rem"><button class="btn btn-ghost btn-sm" id="inboxCheckBtn">Check inbox now</button><span id="inboxMsg" class="muted" style="font-size:.84rem"></span></div>' : '') +
-      '<div class="muted" style="font-size:.84rem;margin-top:.5rem">No inbox connected? Use <strong>“📥 Import from email”</strong> below to paste one in by hand any time.</div></div>' +
+      '<div style="margin-top:1rem"><strong>Auto-import from a resume inbox</strong>' +
+      (inboxStatus.configured ? '<div class="muted" style="font-size:.88rem;margin-top:.2rem">✅ Reading <strong>' + esc(inboxStatus.user) + '</strong> — emails here auto-import, with the AI filling out details + a summary.</div><div style="margin-top:.4rem"><button class="btn btn-ghost btn-sm" id="inboxCheckBtn">Check inbox now</button><span id="inboxMsg" class="muted" style="font-size:.84rem"></span></div>' : '') +
+      (inboxStatus.webhookReady
+        ? '<div class="muted" style="font-size:.88rem;margin-top:' + (inboxStatus.configured ? '.7rem' : '.2rem') + '">📨 <strong>Forwarding webhook ready.</strong> In CloudMailin (or any forwarding service), set <strong>Target</strong> to this URL and <strong>Format</strong> to <strong>JSON</strong>:</div><div class="link-box" style="margin-top:.35rem"><code style="font-size:.7rem;word-break:break-all">' + esc(inboxStatus.webhookUrl) + '</code><button class="btn btn-primary btn-sm" id="copyWebhook">Copy</button></div><div class="muted" style="font-size:.83rem;margin-top:.3rem">Then forward your Seek/Indeed emails to the address CloudMailin gives you — each becomes a candidate (resume + AI fill).</div>'
+        : (!inboxStatus.configured ? '<div class="muted" style="font-size:.88rem;margin-top:.2rem">📥 Not on yet. The robust way: a forwarding service like <strong>CloudMailin</strong> (free) pushes emails straight in. Set <code>INBOUND_SECRET</code> in Render (any random word) and your webhook URL appears right here to paste in.</div>' : '')) +
+      '<div class="muted" style="font-size:.84rem;margin-top:.5rem">Prefer by hand? Use <strong>“📥 Import from email”</strong> below any time.</div></div>' +
       '</div></details>';
     const careersLink = location.origin + '/jobs/' + State.me.business.id;
     const openings = jobOpenings || [];
@@ -949,6 +948,7 @@
       } catch (e) { msg.innerHTML = '<span style="color:#c0392b"> Something went wrong — ' + esc(e.message) + '</span>'; }
       icb.disabled = false; icb.textContent = t0;
     };
+    const cwh = $('#copyWebhook'); if (cwh) cwh.onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(inboxStatus.webhookUrl); toast('Webhook URL copied — paste it into CloudMailin'); };
     const pj = $('#postJob'); if (pj) pj.onclick = () => openJobModal(null);
     const cc = $('#copyCareers'); if (cc) cc.onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(careersLink); toast('Careers page link copied'); };
     root().querySelectorAll('.job-edit').forEach((b) => { b.onclick = () => openJobModal((jobOpenings || []).find((j) => j.id === b.getAttribute('data-id'))); });
