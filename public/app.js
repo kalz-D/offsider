@@ -213,6 +213,7 @@
   }
 
   // ---------------- dashboard ----------------
+  function gentleDue(dd) { if (dd <= -8) return 'whenever you get a sec'; if (dd < 0) return 'a bit overdue'; if (dd === 0) return 'today'; if (dd <= 2) return 'in a day or two'; return 'soon'; }
   async function viewDashboard() {
     const [d, coach, upcoming, leave, suggestions, onboarding] = await Promise.all([
       api('GET', '/dashboard'), api('GET', '/coach'), api('GET', '/lifecycle'),
@@ -224,50 +225,44 @@
     const newSuggestions = (suggestions || []).filter((x) => x.status === 'new');
     const dueMoments = (upcoming || []).filter((m) => m.daysUntil <= 3);
 
-    // ---- one merged "needs you today" list ----
+    // one merged, plain-language "worth a look" list — person first, calm hints
     const actions = [];
-    dueMoments.forEach((m) => actions.push({ icon: m.daysUntil < 0 ? '⏰' : '📅', urgency: m.daysUntil < 0 ? 3 : 1, title: m.title.replace(/\{name\}/g, (m.employee_name || '').split(' ')[0]), sub: (m.employee_name || '') + ' · ' + relativeDue(m.daysUntil), link: '#/member/' + m.employee_id, badge: relativeDue(m.daysUntil), bcls: m.daysUntil < 0 ? 'badge-watchful' : '' }));
-    pendingLeave.forEach((l) => actions.push({ icon: '🌴', urgency: 2, title: (l.employee_name || 'Someone') + ' — leave request', sub: (l.leave_type || 'Leave') + ' · ' + l.start_date, link: '#/leave', badge: 'Approve', bcls: 'badge-watchful' }));
-    newSuggestions.forEach((x) => actions.push({ icon: '💡', urgency: 1, title: 'New suggestion' + (x.anonymous ? '' : ' — ' + (x.employee_name || '')), sub: (x.category ? x.category + ' · ' : '') + (x.body || '').slice(0, 50), link: '#/suggestions', badge: 'New', bcls: '' }));
-    (d.attention || []).forEach((c) => actions.push({ icon: c.flow_icon || '🔔', urgency: 3, title: c.title, sub: (c.flow_name || '') + ' · ' + (c.employee_name || ''), link: '#/case/' + c.id, badge: c.reason, bcls: 'badge-watchful' }));
+    (d.attention || []).forEach((c) => actions.push({ icon: '🔔', urgency: 3, title: esc(c.title), hint: 'needs a look', link: '#/case/' + c.id, urgent: true }));
+    pendingLeave.forEach((l) => actions.push({ icon: '🌴', urgency: 2, title: esc((l.employee_name || 'Someone').split(' ')[0]) + ' wants some time off', hint: 'tap to sort it', link: '#/leave', urgent: true }));
+    dueMoments.forEach((m) => { const fn = (m.employee_name || '').split(' ')[0]; actions.push({ icon: '👋', urgency: m.daysUntil < -14 ? 2 : 1, title: esc(fn) + ' — ' + esc(m.title.replace(/\{name\}/g, fn).toLowerCase()), hint: gentleDue(m.daysUntil), link: '#/member/' + m.employee_id, urgent: false }); });
+    newSuggestions.forEach((x) => actions.push({ icon: '💡', urgency: 1, title: (x.anonymous ? 'Someone' : esc((x.employee_name || 'Someone').split(' ')[0])) + ' shared an idea', hint: 'have a read', link: '#/suggestions', urgent: false }));
     actions.sort((a, b) => b.urgency - a.urgency);
-    const needCount = actions.length;
-    const actionList = needCount
-      ? '<div class="row-list">' + actions.slice(0, 8).map((a) => '<a href="' + a.link + '" class="row"><span class="ic-circle">' + a.icon + '</span><span class="grow"><span class="t">' + esc(a.title) + '</span><span class="s">' + esc(a.sub) + '</span></span><span class="meta"><span class="badge ' + a.bcls + '">' + esc(a.badge) + '</span></span></a>').join('') + '</div>'
-      : '<div class="card card-pad" style="text-align:center;padding:1.8rem"><div style="font-size:2.2rem">✅</div><strong>You\'re all caught up.</strong><div class="muted">Nothing needs you right now — nice work.</div></div>';
+    const top = actions.slice(0, 3);
+    const more = actions.length - top.length;
 
-    // ---- clickable stat tiles ----
-    const tile = (href, n, label, cls, alert) => '<a href="' + href + '" class="stat-tile ' + (cls || '') + (alert ? ' alert' : '') + '"><div class="st-n">' + n + '</div><div class="st-l">' + label + '</div></a>';
-    const tiles = '<div class="stat-grid">' +
-      tile('#/team', s.employees, 'Workers') +
-      tile('#/onboarding', (onboarding || []).length, 'Onboarding', 'dev') +
-      tile('#/cases', s.openCases, 'Open cases') +
-      tile('#/leave', pendingLeave.length, 'Leave to OK', '', pendingLeave.length > 0) +
-      tile('#/suggestions', newSuggestions.length, 'New ideas', '', newSuggestions.length > 0) +
-      tile('#/cases', s.positive, 'Good news', 'pos') +
+    // the one constant, obvious thing to do
+    const hero = '<a href="#/new" class="hero-action"><span class="ha-ic">＋</span><span class="ha-txt"><span class="ha-t">Something come up with the crew?</span><span class="ha-s">A problem, a bit of good news, a change — start here and I\'ll walk you through it.</span></span><span class="ha-go">→</span></a>';
+
+    const look = top.length
+      ? '<div class="look-list">' + top.map((a) => '<a href="' + a.link + '" class="look-row' + (a.urgent ? ' urgent' : '') + '"><span class="lr-ic">' + a.icon + '</span><span class="grow"><span class="lr-t">' + a.title + '</span><span class="lr-h">' + esc(a.hint) + '</span></span><span class="lr-go">›</span></a>').join('') + '</div>' +
+        (more > 0 ? '<a href="#/cases" class="look-more">+ ' + more + ' more, no rush →</a>' : '')
+      : '<div class="all-good"><span class="ag-ic">👍</span><span><strong>You\'re on top of it.</strong><span class="muted"> Nothing needs you right now.</span></span></div>';
+
+    const nudge = (coach.nudges && coach.nudges.length)
+      ? (function () { const n = coach.nudges[0]; return '<div class="section-soft">A thought 💭</div><div class="coach-card tone-' + n.tone + '"><div class="grow"><div class="ct">' + esc(n.title) + (n.employee_name ? ' · ' + esc(n.employee_name) : '') + '</div><div class="cp">' + esc(n.prompt) + '</div></div>' + (n.employee_id ? '<a href="#/member/' + n.employee_id + '" class="btn btn-ghost btn-sm">Open</a>' : '') + '</div>'; })()
+      : '';
+
+    const chip = (href, n, label, alert) => '<a href="' + href + '" class="navchip' + (alert ? ' alert' : '') + '"><strong>' + n + '</strong>' + label + '</a>';
+    const strip = '<div class="navchips">' +
+      chip('#/team', s.employees, 'workers') +
+      chip('#/onboarding', (onboarding || []).length, 'onboarding') +
+      chip('#/leave', pendingLeave.length, 'leave', pendingLeave.length > 0) +
+      chip('#/suggestions', newSuggestions.length, 'ideas', newSuggestions.length > 0) +
       '</div>';
 
-    const coachPanel = (coach.nudges && coach.nudges.length)
-      ? '<div class="section-title" style="margin-top:1.8rem"><h3>🧠 Your coach reckons…</h3></div>' +
-        (coach.tips && coach.tips.length ? '<div class="coach-tip" style="margin-bottom:.7rem">💡 ' + esc(coach.tips[Math.floor(Math.random() * coach.tips.length)]) + '</div>' : '') +
-        coach.nudges.map((n) => '<div class="coach-card tone-' + n.tone + '"><div class="grow"><div class="ct">' + esc(n.title) + (n.employee_name ? ' · ' + esc(n.employee_name) : '') + '</div><div class="cp">' + esc(n.prompt) + '</div>' + (n.extra ? '<div class="muted" style="font-size:.82rem;margin-top:.2rem">“' + esc(n.extra) + '”</div>' : '') + '</div>' + (n.employee_id ? '<a href="#/member/' + n.employee_id + '" class="btn btn-ghost btn-sm">' + esc(n.action || 'Open') + '</a>' : '') + '</div>').join('')
-      : '';
     const banner = d.industrySet ? '' :
-      '<div class="banner"><span style="font-size:1.6rem">🚀</span><div class="grow"><strong>Unlock career paths</strong><div class="muted" style="font-size:.9rem">Pick your industry and Offsider loads role ladders and the steps your crew can take to build a career.</div></div><a href="#/career" class="btn btn-primary btn-sm">Pick your industry</a></div>';
-    const recent = d.recent.length
-      ? '<div class="row-list">' + d.recent.map((c) =>
-        '<a href="#/case/' + c.id + '" class="row ' + sent(c.sentiment).cls + '">' +
-        '<span class="ic-circle">' + (c.flow_icon || '🗂️') + '</span>' +
-        '<span class="grow"><span class="t">' + esc(c.title) + '</span><span class="s">' + esc(c.employee_name || '') + '</span></span>' +
-        '<span class="meta"><span class="badge">' + (STATUS[c.status] || c.status) + '</span><br><span class="muted">' + fmtDate(c.updated_at) + '</span></span></a>').join('') + '</div>'
-      : '<div class="empty"><span class="ic">🗂️</span>No cases yet. <a href="#/new">Start something</a> when a situation comes up.</div>';
+      '<a href="#/career" class="banner" style="text-decoration:none"><span style="font-size:1.6rem">🚀</span><span class="grow"><strong>Set up career paths</strong><span class="muted" style="font-size:.9rem;display:block">Pick your industry so Offsider can map your crew\'s pay and progression.</span></span><span class="btn btn-primary btn-sm">Set up</span></a>';
 
     const content = banner +
-      '<p class="dash-sub">' + (needCount ? '<strong>' + needCount + '</strong> thing' + (needCount === 1 ? '' : 's') + ' could use you today.' : 'You\'re all caught up. 👌') + '</p>' +
-      tiles +
-      '<div class="section-title"><h3>🎯 Needs you' + (needCount ? ' (' + needCount + ')' : '') + '</h3></div>' + actionList +
-      coachPanel +
-      '<div class="section-title" style="margin-top:1.8rem"><h3>Recent activity</h3><a href="#/cases" class="btn btn-ghost btn-sm">See all</a></div>' + recent;
+      hero +
+      '<div class="section-soft">Worth a look' + (actions.length ? ' · ' + actions.length : '') + '</div>' + look +
+      nudge +
+      strip;
     layout('home', 'G\'day, ' + firstName, content);
   }
 
