@@ -101,6 +101,24 @@ function toE164AU(phone) {
   if (p[0] === '0') return '+61' + p.slice(1);
   return '+61' + p;
 }
+// ClickSend's /sms/send returns HTTP 200 even when a message is rejected — the truth is the
+// top-level response_code plus the per-message data.messages[0].status. Judge on those, not r.ok.
+function clickSendOutcome(httpOk, httpStatus, j, raw) {
+  const respCode = j && (j.response_code || j.responseCode);
+  const respMsg = (j && (j.response_msg || j.responseMsg)) || '';
+  const msgs = (j && j.data && Array.isArray(j.data.messages)) ? j.data.messages : [];
+  const mStatus = msgs.length ? String(msgs[0].status || '') : '';
+  if (!httpOk) {
+    const detail = respMsg || respCode || (raw ? String(raw).slice(0, 160) : '');
+    return { sent: false, reason: 'rejected', error: 'ClickSend ' + httpStatus + (detail ? ' — ' + detail : '') };
+  }
+  const codeOk = !respCode || String(respCode).toUpperCase() === 'SUCCESS';
+  const up = mStatus.toUpperCase();
+  const msgOk = !mStatus || up === 'SUCCESS' || up === 'QUEUED';
+  if (codeOk && msgOk) return { sent: true };
+  const why = (mStatus && up !== 'SUCCESS' && up !== 'QUEUED') ? mStatus : (respMsg || respCode || 'message not accepted');
+  return { sent: false, reason: 'rejected', error: 'ClickSend: ' + why };
+}
 async function sendSms({ to, body }) {
   if (!SMS.configured) return { sent: false, reason: 'not_configured' };
   const num = toE164AU(to);
@@ -115,9 +133,10 @@ async function sendSms({ to, body }) {
     }
     if (SMS.provider === 'clicksend') {
       const auth = 'Basic ' + Buffer.from(process.env.CLICKSEND_USERNAME + ':' + process.env.CLICKSEND_API_KEY).toString('base64');
-      const r = await fetch('https://rest.clicksend.com/v3/sms/send', { method: 'POST', headers: { Authorization: auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [{ from: SMS.from || undefined, to: num, body: body }] }) });
-      if (!r.ok) throw new Error('clicksend ' + r.status + ' ' + (await r.text()).slice(0, 140));
-      return { sent: true };
+      const r = await fetch('https://rest.clicksend.com/v3/sms/send', { method: 'POST', headers: { Authorization: auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [{ source: 'offsider', from: SMS.from || undefined, to: num, body: body }] }) });
+      const raw = await r.text();
+      let j = null; try { j = JSON.parse(raw); } catch (e) {}
+      return clickSendOutcome(r.ok, r.status, j, raw);
     }
     return { sent: false, reason: 'not_configured' };
   } catch (e) { console.error('sms send failed:', e.message); return { sent: false, reason: 'send_failed', error: e.message }; }
@@ -680,6 +699,14 @@ app.get('/api/legal-refs', (req, res) => res.json(legalRefs));
 app.get('/api/email-status', (req, res) => res.json({ configured: MAIL.configured, from: MAIL.from }));
 app.get('/api/sms-status', (req, res) => res.json({ configured: SMS.configured, provider: SMS.provider }));
 app.get('/api/ai-status', (req, res) => res.json({ configured: AI.configured, model: AI.model }));
+// Send a real test text so the manager can prove the SMS connection actually works (not just env-vars-present).
+app.post('/api/sms/test', h(async (req, res) => {
+  if (!SMS.configured) return res.json({ sent: false, reason: 'not_configured' });
+  const to = (req.body && req.body.to ? String(req.body.to) : '').trim();
+  if (!to || to.replace(/\D/g, '').length < 8) return res.status(400).json({ error: 'Enter a valid mobile number to text.' });
+  const r = await sendSms({ to, body: req.business.name + ': ✅ Your Offsider texting is connected. (Test message — no reply needed.)' });
+  res.json(Object.assign({ to: toE164AU(to), provider: SMS.provider }, r));
+}));
 app.get('/api/wellbeing', h(async (req, res) => {
   const st = await db.prepare('SELECT * FROM business_settings WHERE business_id = ?').get(req.business.id);
   const eap = (st && (st.eap_name || st.eap_phone || st.eap_url)) ? { name: st.eap_name, phone: st.eap_phone, url: st.eap_url, notes: st.eap_notes } : null;
@@ -1586,12 +1613,17 @@ app.get('/jobs/:bizId', (req, res) => res.sendFile(path.join(PUBLIC, 'careers.ht
 app.use(express.static(PUBLIC));
 
 // ---------- startup ----------
-(async () => {
-  await init();
-  await require('./seed')({ db, uid, now, today, bcrypt, flows, templates, fillTemplate, industries, feedbackTemplates });
-  app.listen(PORT, () => {
-    console.log(`\n  Offsider is running on port ${PORT}.`);
-    console.log(`  Database: ${db.usePg ? 'Postgres/Supabase' : 'SQLite (local)'}`);
-    console.log(`  Demo login: demo@offsider.au / offsider123\n`);
-  });
-})().catch((e) => { console.error('Startup failed:', e); process.exit(1); });
+if (require.main === module) {
+  (async () => {
+    await init();
+    await require('./seed')({ db, uid, now, today, bcrypt, flows, templates, fillTemplate, industries, feedbackTemplates });
+    app.listen(PORT, () => {
+      console.log(`\n  Offsider is running on port ${PORT}.`);
+      console.log(`  Database: ${db.usePg ? 'Postgres/Supabase' : 'SQLite (local)'}`);
+      console.log(`  Demo login: demo@offsider.au / offsider123\n`);
+    });
+  })().catch((e) => { console.error('Startup failed:', e); process.exit(1); });
+}
+
+// exported for unit tests (require.main guard above means requiring this file won't start the server)
+module.exports = { clickSendOutcome, toE164AU };

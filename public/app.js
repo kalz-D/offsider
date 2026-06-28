@@ -869,7 +869,9 @@
       (contract ? '<div class="link-box"><code>📄 ' + esc(contract.name) + '</code><a href="/api/files/' + contract.id + '/download" target="_blank" class="btn btn-ghost btn-sm">View</a><button class="btn btn-ghost btn-sm" id="delContract">Remove</button></div>' : '') +
       '<label class="btn btn-ghost btn-sm" style="margin-top:.4rem;cursor:pointer">' + (contract ? '↻ Replace contract' : '⬆ Upload contract') + '<input type="file" id="contractFile" accept=".pdf,.doc,.docx" style="display:none"></label>' +
       '<div style="margin-top:1rem"><strong>Sending by email</strong><div class="muted" style="font-size:.88rem;margin-top:.2rem">' + (emailStatus.configured ? '✅ Connected as <strong>' + esc(emailStatus.from) + '</strong> — you can email forms and offers straight from the app.' : '✉️ Not connected yet — copy-and-paste for now. Add your email’s SMTP details (env vars) to switch on one-click send.') + '</div></div>' +
-      '<div style="margin-top:1rem"><strong>Texting (SMS)</strong><div class="muted" style="font-size:.88rem;margin-top:.2rem">' + (smsStatus.configured ? '✅ Connected via <strong>' + esc(smsStatus.provider) + '</strong> — you can text application forms, reference requests and offer links.' : '📱 Not connected. Sign up for <strong>ClickSend</strong> (Aussie, simplest) or <strong>Twilio</strong>, then add the API keys as env vars and the “Text” buttons go live. Texts go out as your business name.') + '</div></div>' +
+      '<div style="margin-top:1rem"><strong>Texting (SMS)</strong><div class="muted" style="font-size:.88rem;margin-top:.2rem">' + (smsStatus.configured ? '✅ Connected via <strong>' + esc(smsStatus.provider) + '</strong> — you can text application forms, reference requests and offer links.' : '📱 Not connected. Sign up for <strong>ClickSend</strong> (Aussie, simplest) or <strong>Twilio</strong>, then add the API keys as env vars and the “Text” buttons go live. Texts go out as your business name.') + '</div>' +
+      (smsStatus.configured ? '<div style="display:flex;gap:.4rem;margin-top:.55rem;flex-wrap:wrap"><input id="smsTestTo" type="tel" placeholder="Your mobile, e.g. 0412 345 678" style="flex:1;min-width:12rem;padding:.45rem .6rem;border:1.5px solid var(--line-strong);border-radius:var(--r);font:inherit"><button class="btn btn-primary btn-sm" id="smsTestBtn">Send test text</button></div><div id="smsTestMsg" class="muted" style="font-size:.84rem;margin-top:.35rem">Text yourself to confirm it really sends — handy after first connecting.</div>' : '') +
+      '</div>' +
       '<div style="margin-top:1rem"><strong>Auto-import applications (advanced)</strong><div class="muted" style="font-size:.88rem;margin-top:.2rem">Use Seek/Indeed as normal, then just hit <strong>“📥 Import from email”</strong> below to drop an applicant (and resume) in — no setup. For fully automatic, point an inbound-email service (CloudMailin/SendGrid) at <code style="font-size:.8rem">/api/inbound/' + esc(State.me.business.id) + '?key=YOUR_SECRET</code> and forward your application emails there.</div></div>' +
       '</div></details>';
     const careersLink = location.origin + '/jobs/' + State.me.business.id;
@@ -896,6 +898,19 @@
     const ie = $('#importEmail'); if (ie) ie.onclick = openImportEmail;
     const cf = $('#contractFile'); if (cf) cf.onchange = async (e) => { const file = e.target.files[0]; if (!file) return; if (file.size > 4 * 1024 * 1024) { toast('File too big (max ~4MB)', 'error'); return; } toast('Uploading…'); const data = await fileToB64(file); await api('POST', '/files', { kind: 'contract', name: file.name, mime: file.type || 'application/octet-stream', data: data }); toast('Contract saved'); viewHiring(); };
     const dc = $('#delContract'); if (dc) dc.onclick = async () => { await api('DELETE', '/files/' + contract.id); toast('Removed'); viewHiring(); };
+    const stb = $('#smsTestBtn'); if (stb) stb.onclick = async () => {
+      const to = ($('#smsTestTo').value || '').trim();
+      const msg = $('#smsTestMsg');
+      if (!to) { msg.innerHTML = '<span style="color:#c0392b">Enter your mobile number first.</span>'; return; }
+      stb.disabled = true; const t0 = stb.textContent; stb.textContent = 'Sending…'; msg.textContent = 'Sending…';
+      try {
+        const r = await api('POST', '/sms/test', { to });
+        if (r && r.sent) msg.innerHTML = '✅ Sent to ' + esc(r.to) + ' — check your phone in a few seconds. <strong>ClickSend is connected.</strong>';
+        else if (r && r.reason === 'not_configured') msg.innerHTML = '<span style="color:#c0392b">Not connected — the ClickSend keys aren’t set on the server yet.</span>';
+        else msg.innerHTML = '<span style="color:#c0392b">Didn’t go through' + (r && r.error ? ' — ' + esc(r.error) : '') + '.</span> Check the API key, your ClickSend balance, and that your sender name is allowed.';
+      } catch (e) { msg.innerHTML = '<span style="color:#c0392b">Something went wrong — ' + esc(e.message) + '</span>'; }
+      stb.disabled = false; stb.textContent = t0;
+    };
     const pj = $('#postJob'); if (pj) pj.onclick = () => openJobModal(null);
     const cc = $('#copyCareers'); if (cc) cc.onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(careersLink); toast('Careers page link copied'); };
     root().querySelectorAll('.job-edit').forEach((b) => { b.onclick = () => openJobModal((jobOpenings || []).find((j) => j.id === b.getAttribute('data-id'))); });
