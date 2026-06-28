@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Apply · Offsider</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  body { background: var(--brand); }
+  .fb-wrap { max-width: 600px; margin: 0 auto; padding: 1.4rem 1rem 4rem; }
+  .fb-top { display: flex; align-items: center; gap: .5rem; color: #fff; padding: 1rem .2rem 1.4rem; }
+  .fb-card { background: var(--surface); border-radius: var(--r-xl); box-shadow: var(--shadow-lg); padding: 1.7rem 1.5rem; }
+  .fb-card h1 { font-size: 1.55rem; }
+  .job-meta { display: flex; flex-wrap: wrap; gap: .4rem; margin: .4rem 0 .8rem; }
+  .job-meta span { background: var(--brand-50); color: var(--brand-700); border-radius: 999px; padding: .25rem .7rem; font-size: .82rem; font-weight: 600; }
+  .job-blurb { white-space: pre-wrap; color: var(--ink-soft); line-height: 1.55; margin-bottom: .4rem; }
+  .q { margin: 1.2rem 0; }
+  .q .qlabel { font-family: var(--font-head); font-weight: 700; font-size: 1rem; margin-bottom: .15rem; }
+  .q .qhelp { font-size: .84rem; color: var(--ink-faint); margin-bottom: .55rem; }
+  .q .req { color: var(--brand); }
+  .choices { display: grid; gap: .5rem; }
+  .choices label { display: flex; align-items: center; gap: .6rem; padding: .75em .9em; border: 1.5px solid var(--line-strong); border-radius: var(--r); cursor: pointer; font-weight: 500; }
+  .choices label.sel { border-color: var(--brand); background: var(--brand-50); }
+  .choices input { accent-color: var(--brand); width: 18px; height: 18px; flex: none; }
+  .fb-done { text-align: center; padding: 1.5rem 1rem; }
+  .fb-done .big { font-size: 3rem; }
+  .next-list { text-align: left; margin: 1.2rem auto 0; max-width: 30rem; }
+  .next-list li { margin: .5rem 0; color: var(--ink-soft); }
+  .fb-foot { text-align: center; color: #bcd2e0; font-size: .82rem; margin-top: 1.4rem; }
+  textarea, input[type=text], input[type=email], input[type=tel] { width: 100%; }
+</style>
+</head>
+<body>
+<div class="fb-wrap">
+  <div class="fb-top"><span class="logo-mark"><svg viewBox="0 0 24 24"><path d="M12 2 L16.5 12.5 L12 10.2 L7.5 12.5 Z" fill="#fff"/><path d="M12 22 L7.5 11.5 L12 13.8 L16.5 11.5 Z" fill="#fff" opacity=".4"/></svg></span><strong style="font-family:var(--font-head);font-size:1.15rem">Offsider</strong></div>
+  <div id="box"><div class="fb-card"><div class="loading-full" style="min-height:120px"><div class="spinner"></div></div></div></div>
+  <div class="fb-foot">Powered by Offsider</div>
+</div>
+<script>
+(function () {
+  var token = location.pathname.split('/').filter(Boolean).pop();
+  var box = document.getElementById('box');
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); };
+  var data = null, answers = {};
+  function card(i) { return '<div class="fb-card">' + i + '</div>'; }
+
+  fetch('/api/public/job/' + token).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (res) {
+      if (!res.ok) { box.innerHTML = card('<div class="fb-done"><div class="big">🤷</div><h1>' + esc(res.j.error || 'Link not found') + '</h1></div>'); return; }
+      data = res.j;
+      if (data.closed) { box.innerHTML = card('<div class="fb-done"><div class="big">🙏</div><h1>This role\'s now closed</h1><p class="muted">Thanks for your interest in ' + esc(data.businessName) + '.</p></div>'); return; }
+      render();
+    });
+
+  function render() {
+    var meta = [data.location, data.employment_type, data.pay_note].filter(Boolean).map(function (m) { return '<span>' + esc(m) + '</span>'; }).join('');
+    var fields = (data.applicationFields || []).map(function (f) {
+      var inner;
+      if (f.type === 'choice') {
+        inner = '<div class="choices" data-choice="' + f.id + '">' + (f.options || []).map(function (o) { return '<label><input type="radio" name="' + f.id + '" value="' + esc(o) + '"> ' + esc(o) + '</label>'; }).join('') + '</div>';
+      } else if (f.type === 'textarea') {
+        inner = '<textarea data-text="' + f.id + '" rows="3" placeholder="Type your answer…"></textarea>';
+      } else {
+        inner = '<input type="text" data-text="' + f.id + '" placeholder="Type your answer…">';
+      }
+      return '<div class="q"><div class="qlabel">' + esc(f.label) + (f.required ? ' <span class="req">*</span>' : '') + '</div>' + (f.help ? '<div class="qhelp">' + esc(f.help) + '</div>' : '') + inner + '</div>';
+    }).join('');
+
+    box.innerHTML = card(
+      '<h1>' + esc(data.title || 'Apply') + '</h1>' +
+      '<div class="muted" style="font-weight:600">' + esc(data.businessName) + '</div>' +
+      (meta ? '<div class="job-meta">' + meta + '</div>' : '') +
+      (data.blurb ? '<div class="job-blurb">' + esc(data.blurb) + '</div>' : '') +
+      '<p class="muted">' + esc(data.applyIntro || '') + '</p>' +
+      '<div class="q"><div class="qlabel">Your name <span class="req">*</span></div><input type="text" id="apName" placeholder="First and last name"></div>' +
+      '<div class="q"><div class="qlabel">Email</div><input type="email" id="apEmail" placeholder="you@email.com"></div>' +
+      '<div class="q"><div class="qlabel">Mobile</div><input type="tel" id="apPhone" placeholder="0400 000 000"></div>' +
+      fields +
+      '<div id="err"></div>' +
+      '<button class="btn btn-primary btn-block btn-lg" id="submit">Send application →</button>');
+
+    box.querySelectorAll('[data-choice] input').forEach(function (inp) {
+      inp.onchange = function () { answers[inp.name] = inp.value; inp.closest('[data-choice]').querySelectorAll('label').forEach(function (l) { l.classList.remove('sel'); }); inp.closest('label').classList.add('sel'); };
+    });
+    box.querySelectorAll('[data-text]').forEach(function (t) { t.oninput = function () { answers[t.getAttribute('data-text')] = t.value; }; });
+    document.getElementById('submit').onclick = submit;
+  }
+
+  function submit() {
+    var name = document.getElementById('apName').value.trim();
+    if (!name) { document.getElementById('err').innerHTML = '<div class="error-msg">Please enter your name.</div>'; return; }
+    var missing = (data.applicationFields || []).filter(function (f) { return f.required && !answers[f.id]; });
+    if (missing.length) { document.getElementById('err').innerHTML = '<div class="error-msg">Please answer the questions marked with *.</div>'; return; }
+    var btn = document.getElementById('submit');
+    btn.disabled = true; btn.textContent = 'Sending…';
+    fetch('/api/public/job/' + token + '/apply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name, email: document.getElementById('apEmail').value.trim(), phone: document.getElementById('apPhone').value.trim(), answers: answers })
+    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) { document.getElementById('err').innerHTML = '<div class="error-msg">' + esc(res.j.error || 'Could not send') + '</div>'; btn.disabled = false; btn.textContent = 'Send application →'; return; }
+        var next = (data.whatNext || []).map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('');
+        box.innerHTML = card('<div class="fb-done"><div class="big">🙌</div><h1>' + esc(res.j.thanks || 'Thanks — your application is in.') + '</h1>' + (next ? '<ul class="next-list">' + next + '</ul>' : '') + '</div>');
+      });
+  }
+})();
+</script>
+</body>
+</html>

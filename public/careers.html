@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Careers · Offsider</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  body { background: var(--brand); }
+  .fb-wrap { max-width: 640px; margin: 0 auto; padding: 1.4rem 1rem 4rem; }
+  .fb-top { display: flex; align-items: center; gap: .5rem; color: #fff; padding: 1rem .2rem 1.4rem; }
+  .fb-card { background: var(--surface); border-radius: var(--r-xl); box-shadow: var(--shadow-lg); padding: 1.7rem 1.5rem; }
+  .fb-card h1 { font-size: 1.7rem; }
+  .job { display: block; border: 1px solid var(--line); border-radius: var(--r-lg); padding: 1.1rem 1.2rem; margin-bottom: .7rem; text-decoration: none; color: var(--ink); transition: transform .1s ease, border-color .12s ease; }
+  .job:hover { transform: translateY(-2px); border-color: var(--brand); text-decoration: none; }
+  .job .jt { font-family: var(--font-head); font-weight: 800; font-size: 1.15rem; }
+  .job .jm { display: flex; flex-wrap: wrap; gap: .35rem; margin: .35rem 0; }
+  .job .jm span { background: var(--brand-50); color: var(--brand-700); border-radius: 999px; padding: .2rem .6rem; font-size: .78rem; font-weight: 600; }
+  .job .jb { color: var(--ink-soft); font-size: .9rem; line-height: 1.5; }
+  .job .go { display: inline-block; margin-top: .6rem; color: var(--brand); font-weight: 700; }
+  .fb-foot { text-align: center; color: #bcd2e0; font-size: .82rem; margin-top: 1.4rem; }
+</style>
+</head>
+<body>
+<div class="fb-wrap">
+  <div class="fb-top"><span class="logo-mark"><svg viewBox="0 0 24 24"><path d="M12 2 L16.5 12.5 L12 10.2 L7.5 12.5 Z" fill="#fff"/><path d="M12 22 L7.5 11.5 L12 13.8 L16.5 11.5 Z" fill="#fff" opacity=".4"/></svg></span><strong style="font-family:var(--font-head);font-size:1.15rem">Offsider</strong></div>
+  <div id="box"><div class="fb-card"><div class="loading-full" style="min-height:120px"><div class="spinner"></div></div></div></div>
+  <div class="fb-foot">Powered by Offsider</div>
+</div>
+<script>
+(function () {
+  var bizId = location.pathname.split('/').filter(Boolean).pop();
+  var box = document.getElementById('box');
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); };
+  fetch('/api/public/careers/' + bizId).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (res) {
+      if (!res.ok) { box.innerHTML = '<div class="fb-card"><h1>Not found</h1></div>'; return; }
+      var d = res.j;
+      var jobs = (d.jobs || []).map(function (j) {
+        var meta = [j.location, j.employment_type, j.pay_note].filter(Boolean).map(function (m) { return '<span>' + esc(m) + '</span>'; }).join('');
+        return '<a class="job" href="/apply/' + j.token + '"><div class="jt">' + esc(j.title) + '</div>' + (meta ? '<div class="jm">' + meta + '</div>' : '') + (j.blurb ? '<div class="jb">' + esc(String(j.blurb).slice(0, 180)) + (String(j.blurb).length > 180 ? '…' : '') + '</div>' : '') + '<span class="go">Apply →</span></a>';
+      }).join('');
+      box.innerHTML = '<div class="fb-card"><h1>Work with ' + esc(d.businessName) + '</h1>' +
+        '<p class="muted">' + esc(d.intro || '') + '</p>' +
+        (d.jobs && d.jobs.length ? jobs : '<div class="empty"><span class="ic">🔍</span>' + esc(d.noRoles || 'No open roles right now.') + '</div>') +
+        '</div>';
+    });
+})();
+</script>
+</body>
+</html>

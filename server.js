@@ -29,6 +29,8 @@ const legalRefs = require('./content/legalRefs');
 const managerAcademy = require('./content/managerAcademy');
 const wellbeingKit = require('./content/wellbeingKit');
 const allowanceKit = require('./content/allowances');
+const careersCopy = require('./content/careersCopy');
+const jobAdKit = require('./content/jobAdKit');
 const nodemailer = require('nodemailer');
 
 // Email sending is OFF until SMTP creds are set in the environment (SMTP_HOST/USER/PASS).
@@ -359,6 +361,32 @@ app.post('/api/public/reference/:token', h(async (req, res) => {
   if (!b.answers || typeof b.answers !== 'object') return res.status(400).json({ error: 'No answers were sent.' });
   await db.prepare('UPDATE candidate_references SET answers=?, status=?, updated_at=? WHERE id=?').run(JSON.stringify(b.answers), 'received', now(), r.id);
   res.json({ ok: true });
+}));
+
+// ---------- public CAREERS page + self-apply (no login) — own the application from click one ----------
+app.get('/api/public/careers/:bizId', h(async (req, res) => {
+  const biz = await db.prepare('SELECT id, name, industry FROM businesses WHERE id = ?').get(req.params.bizId);
+  if (!biz) return res.status(404).json({ error: 'Not found' });
+  const jobs = await db.prepare("SELECT title, blurb, location, employment_type, pay_note, token FROM job_openings WHERE business_id = ? AND status = 'open' ORDER BY created_at DESC").all(biz.id);
+  res.json({ businessName: biz.name, industry: biz.industry, intro: careersCopy.careersIntro, noRoles: careersCopy.noRoles, jobs });
+}));
+app.get('/api/public/job/:token', h(async (req, res) => {
+  const job = await db.prepare('SELECT * FROM job_openings WHERE token = ?').get(req.params.token);
+  if (!job) return res.status(404).json({ error: 'This job link is not valid.' });
+  const biz = (await db.prepare('SELECT name FROM businesses WHERE id = ?').get(job.business_id)) || {};
+  res.json({ businessName: biz.name || '', title: job.title, blurb: job.blurb, location: job.location, employment_type: job.employment_type, pay_note: job.pay_note, closed: job.status !== 'open', applyIntro: careersCopy.applyIntro, whatNext: careersCopy.whatNext, applicationFields: interviewKit.applicationFields });
+}));
+app.post('/api/public/job/:token/apply', h(async (req, res) => {
+  const job = await db.prepare('SELECT * FROM job_openings WHERE token = ?').get(req.params.token);
+  if (!job) return res.status(404).json({ error: 'This job link is not valid.' });
+  if (job.status !== 'open') return res.status(410).json({ error: 'Sorry, this role is now closed.' });
+  const b = req.body || {};
+  if (!b.name || !String(b.name).trim()) return res.status(400).json({ error: 'Please enter your name.' });
+  const id = uid(); const token = newToken();
+  await db.prepare('INSERT INTO candidates (id, business_id, name, email, phone, role_applied, status, token, application, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+    .run(id, job.business_id, String(b.name).trim(), b.email || null, b.phone || null, job.title || null, 'applied', token, JSON.stringify(b.answers || {}), now(), now());
+  await notifyManagers(job.business_id, 'application', 'New application — ' + String(b.name).trim(), (job.title || 'a role') + ' · applied via your careers page', '#/candidate/' + id, null);
+  res.json({ ok: true, thanks: careersCopy.thanks });
 }));
 
 // ---------- cron hook (no login; guarded by CRON_SECRET) ----------
@@ -1067,6 +1095,38 @@ app.post('/api/references/:id/send', h(async (req, res) => {
   res.json(Object.assign({ to: r.email, link, channel }, er));
 }));
 
+// ---------- job openings (own careers page + self-apply links) ----------
+app.get('/api/job-ad-kit', (req, res) => res.json(jobAdKit));
+app.get('/api/job-openings', h(async (req, res) => {
+  const rows = await db.prepare('SELECT * FROM job_openings WHERE business_id = ? ORDER BY created_at DESC').all(req.business.id);
+  const out = await Promise.all(rows.map(async (j) => {
+    const cc = (await db.prepare('SELECT COUNT(*) c FROM candidates WHERE business_id = ? AND role_applied = ?').get(req.business.id, j.title)).c;
+    return { id: j.id, title: j.title, blurb: j.blurb, location: j.location, employment_type: j.employment_type, pay_note: j.pay_note, status: j.status, token: j.token, applicants: cc };
+  }));
+  res.json(out);
+}));
+app.post('/api/job-openings', h(async (req, res) => {
+  const b = req.body || {};
+  if (!b.title || !String(b.title).trim()) return res.status(400).json({ error: 'A title is needed.' });
+  const id = uid(); const token = newToken();
+  await db.prepare('INSERT INTO job_openings (id, business_id, title, blurb, location, employment_type, pay_note, status, token, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+    .run(id, req.business.id, String(b.title).trim(), b.blurb || null, b.location || null, b.employment_type || null, b.pay_note || null, 'open', token, req.user.id, now());
+  res.json({ ok: true, id, token });
+}));
+app.patch('/api/job-openings/:id', h(async (req, res) => {
+  const j = await db.prepare('SELECT * FROM job_openings WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!j) return res.status(404).json({ error: 'Not found' });
+  const b = req.body || {};
+  const pick = (k) => (b[k] != null ? b[k] : j[k]);
+  await db.prepare('UPDATE job_openings SET title=?, blurb=?, location=?, employment_type=?, pay_note=?, status=? WHERE id=?')
+    .run(pick('title'), pick('blurb'), pick('location'), pick('employment_type'), pick('pay_note'), pick('status'), j.id);
+  res.json({ ok: true });
+}));
+app.delete('/api/job-openings/:id', h(async (req, res) => {
+  await db.prepare('DELETE FROM job_openings WHERE id=? AND business_id=?').run(req.params.id, req.business.id);
+  res.json({ ok: true });
+}));
+
 // ---------- worker-app management: plans, productivity, leave, suggestions ----------
 app.post('/api/employees/:id/plans', h(async (req, res) => {
   const e = await db.prepare('SELECT * FROM employees WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
@@ -1330,6 +1390,8 @@ app.get(/^\/app(\/.*)?$/, (req, res) => res.sendFile(path.join(PUBLIC, 'app.html
 app.get('/f/:token', (req, res) => res.sendFile(path.join(PUBLIC, 'feedback.html')));
 app.get('/c/:token', (req, res) => res.sendFile(path.join(PUBLIC, 'candidate.html')));
 app.get('/r/:token', (req, res) => res.sendFile(path.join(PUBLIC, 'reference.html')));
+app.get('/apply/:token', (req, res) => res.sendFile(path.join(PUBLIC, 'apply.html')));
+app.get('/jobs/:bizId', (req, res) => res.sendFile(path.join(PUBLIC, 'careers.html')));
 app.use(express.static(PUBLIC));
 
 // ---------- startup ----------

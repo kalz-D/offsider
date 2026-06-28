@@ -165,6 +165,11 @@ const SCHEMA_SQL = `
     candidate_id TEXT PRIMARY KEY, business_id TEXT NOT NULL, scheduled_at TEXT, location TEXT, note TEXT,
     prefill_sent INTEGER DEFAULT 0, reminder_sent INTEGER DEFAULT 0, updated_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS job_openings (
+    id TEXT PRIMARY KEY, business_id TEXT NOT NULL, title TEXT, blurb TEXT, location TEXT,
+    employment_type TEXT, pay_note TEXT, status TEXT DEFAULT 'open', token TEXT UNIQUE,
+    created_by TEXT, created_at TEXT NOT NULL
+  );
   CREATE INDEX IF NOT EXISTS idx_users_business ON users(business_id);
   CREATE INDEX IF NOT EXISTS idx_emp_business   ON employees(business_id);
   CREATE INDEX IF NOT EXISTS idx_cases_business ON cases(business_id);

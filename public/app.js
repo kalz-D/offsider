@@ -858,7 +858,7 @@
   function statusBadge(s) { const m = CAND_STATUS[s] || { label: s, cls: '' }; return '<span class="badge ' + m.cls + '">' + esc(m.label) + '</span>'; }
 
   async function viewHiring() {
-    const [cands, contracts, emailStatus, smsStatus] = await Promise.all([api('GET', '/candidates'), api('GET', '/files?kind=contract').catch(() => []), api('GET', '/email-status').catch(() => ({ configured: false })), api('GET', '/sms-status').catch(() => ({ configured: false }))]);
+    const [cands, contracts, emailStatus, smsStatus, jobOpenings] = await Promise.all([api('GET', '/candidates'), api('GET', '/files?kind=contract').catch(() => []), api('GET', '/email-status').catch(() => ({ configured: false })), api('GET', '/sms-status').catch(() => ({ configured: false })), api('GET', '/job-openings').catch(() => [])]);
     const closedSet = { hired: 1, rejected: 1, declined: 1 };
     const active = cands.filter((c) => !closedSet[c.status]);
     const done = cands.filter((c) => closedSet[c.status]);
@@ -871,8 +871,19 @@
       '<div style="margin-top:1rem"><strong>Sending by email</strong><div class="muted" style="font-size:.88rem;margin-top:.2rem">' + (emailStatus.configured ? '✅ Connected as <strong>' + esc(emailStatus.from) + '</strong> — you can email forms and offers straight from the app.' : '✉️ Not connected yet — copy-and-paste for now. Add your email’s SMTP details (env vars) to switch on one-click send.') + '</div></div>' +
       '<div style="margin-top:1rem"><strong>Texting (SMS)</strong><div class="muted" style="font-size:.88rem;margin-top:.2rem">' + (smsStatus.configured ? '✅ Connected via <strong>' + esc(smsStatus.provider) + '</strong> — you can text application forms, reference requests and offer links.' : '📱 Not connected. Sign up for <strong>ClickSend</strong> (Aussie, simplest) or <strong>Twilio</strong>, then add the API keys as env vars and the “Text” buttons go live. Texts go out as your business name.') + '</div></div>' +
       '</div></details>';
-    const body = setupPanel +
-      '<div class="section-title"><h3>Hiring pipeline</h3><button class="btn btn-primary btn-sm" id="addCand">+ Add a candidate</button></div>' +
+    const careersLink = location.origin + '/jobs/' + State.me.business.id;
+    const openings = jobOpenings || [];
+    const openingRow = (j) => {
+      const applyLink = location.origin + '/apply/' + j.token;
+      return '<div class="card card-pad" style="margin-bottom:.6rem"><div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start"><div class="grow"><strong>' + esc(j.title) + '</strong> ' + (j.status === 'open' ? '<span class="badge badge-positive">Open</span>' : '<span class="badge">Closed</span>') + (j.applicants ? ' <span class="muted" style="font-size:.85rem">· ' + j.applicants + ' applicant' + (j.applicants === 1 ? '' : 's') + '</span>' : '') + ([j.location, j.employment_type, j.pay_note].filter(Boolean).length ? '<div class="muted" style="font-size:.85rem">' + [j.location, j.employment_type, j.pay_note].filter(Boolean).map(esc).join(' · ') + '</div>' : '') + '</div><button class="btn btn-ghost btn-sm job-edit" data-id="' + j.id + '">edit</button></div>' +
+        (j.status === 'open' ? '<div class="link-box" style="margin-top:.5rem"><code>' + esc(applyLink) + '</code><button class="btn btn-ghost btn-sm job-copy" data-l="' + esc(applyLink) + '">Copy apply link</button></div>' : '') + '</div>';
+    };
+    const openingsSection = '<div class="section-title"><h3>📣 Job openings — your own front door</h3><button class="btn btn-primary btn-sm" id="postJob">+ Post a job</button></div>' +
+      '<p class="muted" style="max-width:66ch;margin-top:-.3rem">Post a role and get a link to drop into your Seek/Indeed ad or socials. When someone applies, they land <strong>straight in your pipeline below</strong> — no re-typing, you own them from the first click.</p>' +
+      (openings.length ? openings.map(openingRow).join('') + '<div class="link-box" style="margin-top:.4rem"><code>' + esc(careersLink) + '</code><button class="btn btn-ghost btn-sm" id="copyCareers">📋 Your careers page (all roles)</button></div>' : '<div class="muted">No openings yet — post one to get a shareable apply link.</div>');
+
+    const body = setupPanel + openingsSection +
+      '<div class="section-title" style="margin-top:1.8rem"><h3>Hiring pipeline</h3><button class="btn btn-primary btn-sm" id="addCand">+ Add a candidate</button></div>' +
       '<p class="muted" style="max-width:64ch;margin-top:-.3rem">From first application to first day. Add a candidate, send them a quick form, run a fair interview, make an offer — and when they accept, turn them into a worker with onboarding ready to go.</p>' +
       (active.length ? '<div class="row-list">' + active.map(row).join('') + '</div>'
         : '<div class="empty"><span class="ic">🧑‍💼</span>No one in the pipeline yet.<br>Add a candidate to get started.<br><button class="btn btn-primary" style="margin-top:1.2rem" id="addCand2">+ Add a candidate</button></div>') +
@@ -882,6 +893,29 @@
     const a2 = $('#addCand2'); if (a2) a2.onclick = openAddCandidate;
     const cf = $('#contractFile'); if (cf) cf.onchange = async (e) => { const file = e.target.files[0]; if (!file) return; if (file.size > 4 * 1024 * 1024) { toast('File too big (max ~4MB)', 'error'); return; } toast('Uploading…'); const data = await fileToB64(file); await api('POST', '/files', { kind: 'contract', name: file.name, mime: file.type || 'application/octet-stream', data: data }); toast('Contract saved'); viewHiring(); };
     const dc = $('#delContract'); if (dc) dc.onclick = async () => { await api('DELETE', '/files/' + contract.id); toast('Removed'); viewHiring(); };
+    const pj = $('#postJob'); if (pj) pj.onclick = () => openJobModal(null);
+    const cc = $('#copyCareers'); if (cc) cc.onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(careersLink); toast('Careers page link copied'); };
+    root().querySelectorAll('.job-edit').forEach((b) => { b.onclick = () => openJobModal((jobOpenings || []).find((j) => j.id === b.getAttribute('data-id'))); });
+    root().querySelectorAll('.job-copy').forEach((b) => { b.onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(b.getAttribute('data-l')); toast('Apply link copied — paste it into your Seek/Indeed ad'); }; });
+  }
+
+  async function openJobModal(job) {
+    const kit = await api('GET', '/job-ad-kit').catch(() => ({}));
+    job = job || {};
+    const types = ['Full time', 'Part time', 'Casual', 'Apprentice', 'Contract'];
+    const avoidHtml = (kit.avoid || []).map((a) => '<div class="dna-item"><div class="dna-topic">🚫 ' + esc(a.dont) + '</div><div class="dna-why">' + esc(a.why) + '</div>' + (a.instead ? '<div class="dna-instead">✅ Instead: ' + esc(a.instead) + '</div>' : '') + '</div>').join('');
+    openModal('<h2>' + (job.id ? 'Edit job opening' : 'Post a job') + '</h2>' +
+      '<div class="field"><label>Job title *</label><input id="joTitle" value="' + esc(job.title || '') + '" placeholder="e.g. Laboratory Assistant"></div>' +
+      '<div class="field"><label>About the role</label><textarea id="joBlurb" rows="5" placeholder="What they\'ll do, the genuine requirements, what makes it a good gig. Describe the job, not the person.">' + esc(job.blurb || '') + '</textarea></div>' +
+      '<div class="grid grid-2"><div class="field"><label>Location</label><input id="joLoc" value="' + esc(job.location || '') + '" placeholder="e.g. Newcastle, NSW"></div><div class="field"><label>Type</label><select id="joType"><option value="">—</option>' + types.map((t) => '<option' + (job.employment_type === t ? ' selected' : '') + '>' + t + '</option>').join('') + '</select></div></div>' +
+      '<div class="field"><label>Pay (optional but recommended)</label><input id="joPay" value="' + esc(job.pay_note || '') + '" placeholder="e.g. $38–$44/hr + super, above award"></div>' +
+      (avoidHtml ? '<details class="dna" style="margin:.4rem 0 1rem"><summary>⚖️ Keep the ad lawful — what not to write</summary><div class="dna-body"><p class="muted" style="margin:.5rem 0">' + esc(kit.intro || '') + '</p>' + avoidHtml + (kit.example && kit.example.good ? '<div class="lr-note" style="margin-top:.6rem"><strong>Good example:</strong> ' + esc(kit.example.good) + '</div>' : '') + '</div></details>' : '') +
+      '<div class="modal-foot">' + (job.id ? '<button class="btn btn-ghost" id="joToggle">' + (job.status === 'open' ? 'Close role' : 'Reopen') + '</button><button class="btn btn-ghost" id="joDel">Delete</button>' : '<button class="btn btn-ghost" id="joCancel">Cancel</button>') + '<button class="btn btn-primary" id="joSave">' + (job.id ? 'Save' : 'Post & get link') + '</button></div>');
+    const payload = () => ({ title: $('#joTitle').value.trim(), blurb: $('#joBlurb').value.trim(), location: $('#joLoc').value.trim(), employment_type: $('#joType').value, pay_note: $('#joPay').value.trim() });
+    $('#joSave').onclick = async () => { if (!$('#joTitle').value.trim()) { toast('A title is needed', 'error'); return; } if (job.id) { await api('PATCH', '/job-openings/' + job.id, payload()); } else { await api('POST', '/job-openings', payload()); } closeModal(); toast('Saved'); viewHiring(); };
+    const jt = $('#joToggle'); if (jt) jt.onclick = async () => { await api('PATCH', '/job-openings/' + job.id, { status: job.status === 'open' ? 'closed' : 'open' }); closeModal(); toast('Updated'); viewHiring(); };
+    const jd = $('#joDel'); if (jd) jd.onclick = async () => { await api('DELETE', '/job-openings/' + job.id); closeModal(); toast('Deleted'); viewHiring(); };
+    const jc = $('#joCancel'); if (jc) jc.onclick = closeModal;
   }
 
   async function openAddCandidate() {
