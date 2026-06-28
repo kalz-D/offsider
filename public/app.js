@@ -870,6 +870,7 @@
       '<label class="btn btn-ghost btn-sm" style="margin-top:.4rem;cursor:pointer">' + (contract ? '↻ Replace contract' : '⬆ Upload contract') + '<input type="file" id="contractFile" accept=".pdf,.doc,.docx" style="display:none"></label>' +
       '<div style="margin-top:1rem"><strong>Sending by email</strong><div class="muted" style="font-size:.88rem;margin-top:.2rem">' + (emailStatus.configured ? '✅ Connected as <strong>' + esc(emailStatus.from) + '</strong> — you can email forms and offers straight from the app.' : '✉️ Not connected yet — copy-and-paste for now. Add your email’s SMTP details (env vars) to switch on one-click send.') + '</div></div>' +
       '<div style="margin-top:1rem"><strong>Texting (SMS)</strong><div class="muted" style="font-size:.88rem;margin-top:.2rem">' + (smsStatus.configured ? '✅ Connected via <strong>' + esc(smsStatus.provider) + '</strong> — you can text application forms, reference requests and offer links.' : '📱 Not connected. Sign up for <strong>ClickSend</strong> (Aussie, simplest) or <strong>Twilio</strong>, then add the API keys as env vars and the “Text” buttons go live. Texts go out as your business name.') + '</div></div>' +
+      '<div style="margin-top:1rem"><strong>Auto-import applications (advanced)</strong><div class="muted" style="font-size:.88rem;margin-top:.2rem">Use Seek/Indeed as normal, then just hit <strong>“📥 Import from email”</strong> below to drop an applicant (and resume) in — no setup. For fully automatic, point an inbound-email service (CloudMailin/SendGrid) at <code style="font-size:.8rem">/api/inbound/' + esc(State.me.business.id) + '?key=YOUR_SECRET</code> and forward your application emails there.</div></div>' +
       '</div></details>';
     const careersLink = location.origin + '/jobs/' + State.me.business.id;
     const openings = jobOpenings || [];
@@ -883,7 +884,7 @@
       (openings.length ? openings.map(openingRow).join('') + '<div class="link-box" style="margin-top:.4rem"><code>' + esc(careersLink) + '</code><button class="btn btn-ghost btn-sm" id="copyCareers">📋 Your careers page (all roles)</button></div>' : '<div class="muted">No openings yet — post one to get a shareable apply link for your socials.</div>');
 
     const body = setupPanel +
-      '<div class="section-title"><h3>Hiring pipeline</h3><button class="btn btn-primary btn-sm" id="addCand">+ Add a candidate</button></div>' +
+      '<div class="section-title"><h3>Hiring pipeline</h3><div style="display:flex;gap:.4rem;flex-wrap:wrap"><button class="btn btn-ghost btn-sm" id="importEmail">📥 Import from email</button><button class="btn btn-primary btn-sm" id="addCand">+ Add a candidate</button></div></div>' +
       '<p class="muted" style="max-width:64ch;margin-top:-.3rem">From first application to first day. Add a candidate, send them a quick form, run a fair interview, make an offer — and when they accept, turn them into a worker with onboarding ready to go.</p>' +
       (active.length ? '<div class="row-list">' + active.map(row).join('') + '</div>'
         : '<div class="empty"><span class="ic">🧑‍💼</span>No one in the pipeline yet.<br>Add a candidate to get started.<br><button class="btn btn-primary" style="margin-top:1.2rem" id="addCand2">+ Add a candidate</button></div>') +
@@ -892,6 +893,7 @@
     layout('hiring', 'Hiring', body);
     const a = $('#addCand'); if (a) a.onclick = openAddCandidate;
     const a2 = $('#addCand2'); if (a2) a2.onclick = openAddCandidate;
+    const ie = $('#importEmail'); if (ie) ie.onclick = openImportEmail;
     const cf = $('#contractFile'); if (cf) cf.onchange = async (e) => { const file = e.target.files[0]; if (!file) return; if (file.size > 4 * 1024 * 1024) { toast('File too big (max ~4MB)', 'error'); return; } toast('Uploading…'); const data = await fileToB64(file); await api('POST', '/files', { kind: 'contract', name: file.name, mime: file.type || 'application/octet-stream', data: data }); toast('Contract saved'); viewHiring(); };
     const dc = $('#delContract'); if (dc) dc.onclick = async () => { await api('DELETE', '/files/' + contract.id); toast('Removed'); viewHiring(); };
     const pj = $('#postJob'); if (pj) pj.onclick = () => openJobModal(null);
@@ -917,6 +919,37 @@
     const jt = $('#joToggle'); if (jt) jt.onclick = async () => { await api('PATCH', '/job-openings/' + job.id, { status: job.status === 'open' ? 'closed' : 'open' }); closeModal(); toast('Updated'); viewHiring(); };
     const jd = $('#joDel'); if (jd) jd.onclick = async () => { await api('DELETE', '/job-openings/' + job.id); closeModal(); toast('Deleted'); viewHiring(); };
     const jc = $('#joCancel'); if (jc) jc.onclick = closeModal;
+  }
+
+  function parseEmailClient(text) {
+    const t = text || '';
+    const NM = "([A-Z][a-zA-Z'\\-]+(?:[ \\t]+[A-Z][a-zA-Z'\\-]+){1,3})";
+    const bad = /^(SEEK|Indeed|LinkedIn|Jora|Application|New|Candidate|Job|Apply|Dear|Hi|Hello)$/i;
+    let name = '';
+    const tries = [new RegExp('\\b(?:Name|Candidate|Applicant|application from|From)[: \\t]+' + NM), new RegExp(NM + '[ \\t]+(?:has applied|applied|submitted)')];
+    for (const rx of tries) { const m = t.match(rx); if (m && !bad.test(m[1].split(' ')[0])) { name = m[1].trim(); break; } }
+    const emails = t.match(/[\w.+\-]+@[\w\-]+\.[\w.\-]+/g) || [];
+    const email = emails.find((e) => !/noreply|no-reply|donotreply|seek\.com|indeed\.com|linkedin\.com|messages\.|notification/i.test(e)) || '';
+    const ph = (t.match(/(?:\+?61|0)\d[\d\s\-]{7,12}\d/) || [])[0] || '';
+    return { name: name, email: email, phone: ph ? ph.replace(/[\s\-]/g, '') : '' };
+  }
+  function openImportEmail() {
+    openModal('<h2>📥 Import an applicant from email</h2><p class="muted">Paste the Seek/Indeed application email — Offsider fills in their details for you to check. Attach their resume if you have it.</p>' +
+      '<div class="field"><label>Paste the application email</label><textarea id="ieText" rows="6" placeholder="Paste the whole email here…"></textarea></div>' +
+      '<div class="grid grid-2"><div class="field"><label>Name *</label><input id="ieName" placeholder="Auto-filled from the email"></div><div class="field"><label>Role</label><input id="ieRole" placeholder="e.g. Lab Assistant"></div></div>' +
+      '<div class="grid grid-2"><div class="field"><label>Email</label><input id="ieEmail"></div><div class="field"><label>Phone</label><input id="iePhone"></div></div>' +
+      '<div class="field"><label>Their resume (optional)</label><input type="file" id="ieResume" accept=".pdf,.doc,.docx"></div>' +
+      '<div class="modal-foot"><button class="btn btn-ghost" id="ieCancel">Cancel</button><button class="btn btn-primary" id="ieSave">Add to pipeline</button></div>');
+    $('#ieText').oninput = function () { const p = parseEmailClient(this.value); if (p.name && !$('#ieName').value) $('#ieName').value = p.name; if (p.email && !$('#ieEmail').value) $('#ieEmail').value = p.email; if (p.phone && !$('#iePhone').value) $('#iePhone').value = p.phone; };
+    $('#ieCancel').onclick = closeModal;
+    $('#ieSave').onclick = async () => {
+      const name = $('#ieName').value.trim();
+      const fi = $('#ieResume'); const file = fi && fi.files && fi.files[0];
+      if (!name && !file) { toast('Add a name, or paste the email', 'error'); return; }
+      const go = async (resume) => { const r = await api('POST', '/candidates/from-email', { text: $('#ieText').value.trim(), name: name, email: $('#ieEmail').value.trim(), phone: $('#iePhone').value.trim(), role: $('#ieRole').value.trim(), resume: resume }); closeModal(); toast('Added to pipeline'); location.hash = '#/candidate/' + r.id; };
+      if (file) { if (file.size > 8 * 1024 * 1024) { toast('Resume too big (max ~8MB)', 'error'); return; } toast('Adding…'); go({ name: file.name, mime: file.type || 'application/octet-stream', data: await fileToB64(file) }); }
+      else go(null);
+    };
   }
 
   async function openAddCandidate() {

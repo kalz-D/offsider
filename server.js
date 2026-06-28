@@ -54,6 +54,39 @@ async function sendEmail({ to, subject, text, attachments }) {
 }
 function fmtWhen(iso) { try { return new Date(iso).toLocaleString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }); } catch (e) { return iso; } }
 
+// Pull a candidate's name + contact out of a forwarded Seek/Indeed application email (best-effort; the manager can tidy it).
+function parseApplicationEmail(subject, text) {
+  const t = (subject || '') + '\n' + (text || '');
+  const subj = subject || '';
+  const NM = "([A-Z][a-zA-Z'\\-]+(?:[ \\t]+[A-Z][a-zA-Z'\\-]+){1,3})";
+  const bad = /^(SEEK|Indeed|LinkedIn|Jora|Application|New|Candidate|Job|Apply|Dear|Hi|Hello)$/i;
+  let name = '';
+  const tries = [
+    new RegExp('\\b(?:Name|Candidate|Applicant|application from|From)[: \\t]+' + NM),
+    new RegExp(NM + '[ \\t]+(?:has applied|applied|submitted)'),
+    new RegExp('[-–—][ \\t]*' + NM + '[ \\t]*$', 'm')
+  ];
+  for (const rx of tries) { const m = (rx.flags.includes('m') ? subj : t).match(rx); if (m && !bad.test(m[1].split(' ')[0])) { name = m[1].trim(); break; } }
+  const emails = t.match(/[\w.+\-]+@[\w\-]+\.[\w.\-]+/g) || [];
+  const email = emails.find((e) => !/noreply|no-reply|donotreply|seek\.com|indeed\.com|linkedin\.com|messages\.|notification/i.test(e)) || null;
+  const phoneRaw = (t.match(/(?:\+?61|0)\d[\d\s\-]{7,12}\d/) || [])[0] || null;
+  return { name: name || '', email: email, phone: phoneRaw ? phoneRaw.replace(/[\s\-]/g, '') : null };
+}
+async function createApplicantCandidate(businessId, parsed, opts) {
+  opts = opts || {};
+  const id = uid(); const token = newToken();
+  await db.prepare('INSERT INTO candidates (id, business_id, name, email, phone, role_applied, status, token, application, resume_text, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+    .run(id, businessId, parsed.name || 'New applicant', parsed.email || null, parsed.phone || null, opts.role || null, 'applied', token, '{}', opts.note || null, now(), now());
+  if (opts.resume && opts.resume.data && opts.resume.name) {
+    const data = String(opts.resume.data).replace(/^data:[^,]*,/, '');
+    if (data && Math.floor(data.length * 3 / 4) <= 8 * 1024 * 1024) {
+      await db.prepare('INSERT INTO candidate_files (id, business_id, candidate_id, kind, name, mime, data, created_at) VALUES (?,?,?,?,?,?,?,?)')
+        .run(uid(), businessId, id, 'resume', String(opts.resume.name).slice(0, 200), opts.resume.mime || 'application/octet-stream', data, now());
+    }
+  }
+  return id;
+}
+
 // SMS sending is OFF until a provider's creds are set. Supports Twilio or ClickSend (native fetch, no SDK).
 const SMS = (function () {
   if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM) return { configured: true, provider: 'twilio', from: process.env.TWILIO_FROM };
@@ -96,7 +129,8 @@ const PUBLIC = path.join(__dirname, 'public');
 
 const PROD = process.env.NODE_ENV === 'production';
 if (PROD) app.set('trust proxy', 1); // behind the host's HTTPS proxy (Render/Railway/Fly)
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '15mb' })); // generous — base64 file uploads (resumes, contracts) and forwarded emails
+app.use(express.urlencoded({ extended: false, limit: '15mb' })); // some inbound-email providers post form-encoded
 
 const sessionOpts = {
   secret: process.env.SESSION_SECRET || 'offsider-dev-secret-change-me',
@@ -394,6 +428,29 @@ app.post('/api/public/job/:token/apply', h(async (req, res) => {
   }
   await notifyManagers(job.business_id, 'application', 'New application — ' + String(b.name).trim(), (job.title || 'a role') + ' · applied via your careers page', '#/candidate/' + id, null);
   res.json({ ok: true, thanks: careersCopy.thanks });
+}));
+
+// ---------- inbound email hook (no login; guarded by INBOUND_SECRET) ----------
+// Point an inbound-email service (CloudMailin, SendGrid Inbound, Mailgun Routes) at
+// POST /api/inbound/<businessId>?key=YOUR_SECRET and forward your Seek/Indeed application
+// emails there — each one becomes a candidate (with resume) in that business's pipeline.
+app.post('/api/inbound/:bizId', h(async (req, res) => {
+  if (!process.env.INBOUND_SECRET || req.query.key !== process.env.INBOUND_SECRET) return res.status(403).json({ error: 'forbidden' });
+  const biz = await db.prepare('SELECT id FROM businesses WHERE id = ?').get(req.params.bizId);
+  if (!biz) return res.status(404).json({ error: 'unknown business' });
+  const b = req.body || {};
+  const subject = b.subject || (b.headers && (b.headers.Subject || b.headers.subject)) || '';
+  const text = b.plain || b.text || b['body-plain'] || b['stripped-text'] || '';
+  let resume = null;
+  const atts = Array.isArray(b.attachments) ? b.attachments : [];
+  if (atts.length) {
+    const a = atts.find((x) => /\.(pdf|docx?|rtf)$/i.test(x.file_name || x.filename || x.name || '')) || atts[0];
+    if (a) resume = { name: a.file_name || a.filename || a.name || 'resume', mime: a.content_type || a.type || 'application/octet-stream', data: a.content || a.data || '' };
+  }
+  const parsed = parseApplicationEmail(subject, text);
+  const id = await createApplicantCandidate(biz.id, parsed, { note: text || null, resume });
+  await notifyManagers(biz.id, 'application', 'New application — ' + parsed.name, 'Forwarded in from your job board', '#/candidate/' + id, null);
+  res.json({ ok: true, id });
 }));
 
 // ---------- cron hook (no login; guarded by CRON_SECRET) ----------
@@ -1100,6 +1157,19 @@ app.post('/api/references/:id/send', h(async (req, res) => {
   const body = 'Hi ' + (r.referee_name || 'there') + ',\n\n' + req.user.name + ' from ' + req.business.name + ' here. ' + (c ? c.name : 'A candidate') + ' has applied for ' + (c && c.role_applied ? 'the ' + c.role_applied + ' role' : 'a role') + ' and listed you as a referee. Could you fill out a short, confidential reference here? It only takes a few minutes:\n\n' + link + '\n\nThanks very much,\n' + req.user.name + '\n' + req.business.name;
   const er = await sendEmail({ to: r.email, subject: 'Reference request — ' + (c ? c.name : 'a candidate'), text: body });
   res.json(Object.assign({ to: r.email, link, channel }, er));
+}));
+
+// quick-add an applicant by pasting a Seek/Indeed email (+ optional resume) — no integration needed
+app.post('/api/candidates/from-email', h(async (req, res) => {
+  const b = req.body || {};
+  const text = b.text || '';
+  if (!String(text).trim() && !(b.resume && b.resume.data) && !(b.name && String(b.name).trim())) return res.status(400).json({ error: 'Paste the email, add a name, or attach a resume.' });
+  const parsed = parseApplicationEmail(b.subject || '', text);
+  if (b.name && String(b.name).trim()) parsed.name = String(b.name).trim();
+  if (b.email) parsed.email = b.email;
+  if (b.phone) parsed.phone = b.phone;
+  const id = await createApplicantCandidate(req.business.id, parsed, { role: b.role || null, note: text || null, resume: b.resume });
+  res.json({ ok: true, id, parsed });
 }));
 
 // ---------- job openings (own careers page + self-apply links) ----------
