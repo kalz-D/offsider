@@ -28,6 +28,8 @@
     return dt.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
   }
   const todayStr = () => new Date().toISOString().slice(0, 10);
+  function fmtDateTime(iso) { try { return new Date(iso).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }); } catch (e) { return iso; } }
+  function toLocalInput(iso) { const d = new Date(iso); const p = (n) => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes()); }
 
   const SENT = {
     positive: { cls: 'sentiment-positive', badge: 'badge-positive', label: 'Good news' },
@@ -216,18 +218,20 @@
   // ---------------- dashboard ----------------
   function gentleDue(dd) { if (dd <= -8) return 'whenever you get a sec'; if (dd < 0) return 'a bit overdue'; if (dd === 0) return 'today'; if (dd <= 2) return 'in a day or two'; return 'soon'; }
   async function viewDashboard() {
-    const [d, coach, upcoming, leave, suggestions, onboarding] = await Promise.all([
+    const [d, coach, upcoming, leave, suggestions, onboarding, interviews] = await Promise.all([
       api('GET', '/dashboard'), api('GET', '/coach'), api('GET', '/lifecycle'),
-      api('GET', '/leave').catch(() => []), api('GET', '/suggestions').catch(() => []), api('GET', '/onboarding').catch(() => [])
+      api('GET', '/leave').catch(() => []), api('GET', '/suggestions').catch(() => []), api('GET', '/onboarding').catch(() => []), api('GET', '/interviews/upcoming').catch(() => [])
     ]);
     const s = d.stats;
     const firstName = State.me.name.split(' ')[0];
     const pendingLeave = (leave || []).filter((l) => l.status === 'pending');
     const newSuggestions = (suggestions || []).filter((x) => x.status === 'new');
     const dueMoments = (upcoming || []).filter((m) => m.daysUntil <= 3);
+    const soonInterviews = (interviews || []).filter((i) => { const t = Date.parse(i.scheduled_at); return !isNaN(t) && t > Date.now() - 2 * 3600000 && t < Date.now() + 3 * 86400000; });
 
     // one merged, plain-language "worth a look" list — person first, calm hints
     const actions = [];
+    soonInterviews.forEach((i) => actions.push({ icon: '📅', urgency: 3, title: 'Interview — ' + esc(i.candidate_name || 'candidate'), hint: fmtDateTime(i.scheduled_at) + (i.location ? ' · ' + esc(i.location) : ''), link: '#/candidate/' + i.candidate_id, urgent: true }));
     (d.attention || []).forEach((c) => actions.push({ icon: '🔔', urgency: 3, title: esc(c.title), hint: 'needs a look', link: '#/case/' + c.id, urgent: true }));
     pendingLeave.forEach((l) => actions.push({ icon: '🌴', urgency: 2, title: esc((l.employee_name || 'Someone').split(' ')[0]) + ' wants some time off', hint: 'tap to sort it', link: '#/leave', urgent: true }));
     dueMoments.forEach((m) => { const fn = (m.employee_name || '').split(' ')[0]; actions.push({ icon: '👋', urgency: m.daysUntil < -14 ? 2 : 1, title: esc(fn) + ' — ' + esc(m.title.replace(/\{name\}/g, fn).toLowerCase()), hint: gentleDue(m.daysUntil), link: '#/member/' + m.employee_id, urgent: false }); });
@@ -926,7 +930,7 @@
       const rlink = location.origin + '/r/' + r.token;
       const sb = r.status === 'received' ? '<span class="badge badge-positive">Received ✓</span>' : '<span class="badge">Awaiting</span>';
       const ans = r.answers ? '<details style="margin-top:.5rem"><summary class="muted" style="cursor:pointer">View answers</summary>' + (refKit.questions || []).map((q, i) => r.answers['r' + i] ? ('<div class="resp-q" style="margin-top:.4rem">' + esc(fillRef(q.question)) + '</div><div class="resp-a">' + esc(r.answers['r' + i]) + '</div>') : '').join('') + (r.notes ? '<div class="resp-q" style="margin-top:.4rem">Your notes</div><div class="resp-a">' + esc(r.notes) + '</div>' : '') + '</details>' : '';
-      return '<div class="card card-pad" style="margin-bottom:.6rem"><div><strong>' + esc(r.referee_name || 'Referee') + '</strong> ' + sb + '<div class="muted" style="font-size:.86rem">' + [r.relationship, r.company, r.phone, r.email].filter(Boolean).map(esc).join(' · ') + '</div></div><div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.6rem"><button class="btn btn-ghost btn-sm ref-copy" data-l="' + esc(rlink) + '">📋 Copy link</button><button class="btn btn-ghost btn-sm ref-email" data-id="' + r.id + '">✉️ Email text</button><button class="btn btn-primary btn-sm ref-fill" data-id="' + r.id + '">' + (r.status === 'received' ? 'Edit answers' : 'Record by phone') + '</button></div>' + ans + '</div>';
+      return '<div class="card card-pad" style="margin-bottom:.6rem"><div><strong>' + esc(r.referee_name || 'Referee') + '</strong> ' + sb + '<div class="muted" style="font-size:.86rem">' + [r.relationship, r.company, r.phone, r.email].filter(Boolean).map(esc).join(' · ') + '</div></div><div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.6rem"><button class="btn btn-ghost btn-sm ref-copy" data-l="' + esc(rlink) + '">📋 Copy link</button>' + (r.email ? '<button class="btn btn-ghost btn-sm ref-send" data-id="' + r.id + '">✉️ Email request</button>' : '<button class="btn btn-ghost btn-sm ref-email" data-id="' + r.id + '">✉️ Email text</button>') + '<button class="btn btn-primary btn-sm ref-fill" data-id="' + r.id + '">' + (r.status === 'received' ? 'Edit answers' : 'Record by phone') + '</button></div>' + ans + '</div>';
     };
     const refSection = '<div class="section-title" style="margin-top:1.8rem"><h3>📞 Reference checks</h3><button class="btn btn-primary btn-sm" id="addReferee">+ Add a referee</button></div>' +
       '<details class="dna" style="border-color:var(--brand);background:var(--brand-50)"><summary style="color:var(--brand)">📋 How to run a reference call (script + what to ask)</summary><div class="dna-body"><p style="margin:.6rem 0;white-space:pre-wrap">' + esc(fillRef(refKit.intro)) + '</p><div class="dna-instead">' + esc(refKit.lawfulNote || '') + ' ' + refChip('references', 'reference checking privacy consent discrimination', 'Reference checks') + '</div></div></details>' +
@@ -935,8 +939,16 @@
     const header = '<div><h1 style="margin:0 0 .15rem">' + esc(c.name) + '</h1><div class="muted">' + esc(c.role_applied || 'Role TBC') + ' &nbsp;·&nbsp; ' + statusBadge(c.status) + '</div>' +
       ((c.email || c.phone) ? '<div class="muted" style="font-size:.86rem;margin-top:.25rem">' + [c.email, c.phone].filter(Boolean).map(esc).join(' &nbsp;·&nbsp; ') + '</div>' : '') + '</div>';
 
+    const sched = c.schedule;
+    const scheduleBlock = (sched && sched.scheduled_at)
+      ? '<div class="panel" style="margin:1.2rem 0;background:var(--brand-50);border-color:var(--brand)"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem"><div><strong>📅 Interview booked</strong><div style="font-family:var(--font-head);font-weight:800;font-size:1.1rem;margin-top:.2rem">' + esc(fmtDateTime(sched.scheduled_at)) + '</div>' + (sched.location ? '<div class="muted">📍 ' + esc(sched.location) + '</div>' : '') + (sched.note ? '<div class="muted" style="font-size:.88rem;margin-top:.2rem">' + esc(sched.note) + '</div>' : '') + '</div><button class="btn btn-ghost btn-sm" id="schedBtn">Reschedule</button></div>' + (c.email ? '<div style="margin-top:.7rem"><button class="btn btn-ghost btn-sm" id="sendAppBtn">✉️ Send them the form now</button></div>' : '') + '</div>'
+      : '<div class="panel" style="margin:1.2rem 0;border-style:dashed"><strong>📅 Schedule the interview</strong><div class="muted" style="font-size:.9rem;margin:.2rem 0 .6rem">Pop in a time — you\'ll get a reminder, and (with email on) their form can auto-send the day before.</div><button class="btn btn-primary btn-sm" id="schedBtn">+ Book a time</button></div>';
+    const resumeFiles = (c.files || []).filter((f) => f.kind === 'resume');
+    const resumeFilesHtml = resumeFiles.length ? '<div class="row-list" style="margin-bottom:.6rem">' + resumeFiles.map((f) => '<div class="row" style="cursor:default"><span class="ic-circle">📎</span><span class="grow"><span class="t">' + esc(f.name) + '</span></span><span class="meta"><a href="/api/candidate-files/' + f.id + '/download" target="_blank" class="btn btn-ghost btn-sm">View</a> <button class="btn btn-ghost btn-sm cfile-del" data-id="' + f.id + '">✕</button></span></div>').join('') + '</div>' : '';
+
     layout('hiring', c.name,
       header +
+      scheduleBlock +
       '<div class="section-title" style="margin-top:1.4rem"><h3>📋 Application</h3></div>' + appHtml +
       actionHtml +
       '<div class="section-title" style="margin-top:1.8rem"><h3>🎤 Interview</h3><button class="btn btn-primary btn-sm" id="saveIv">Save interview</button></div>' +
@@ -946,8 +958,9 @@
       refSection +
       '<div class="section-title" style="margin-top:1.4rem"><h3>🤔 Your read on them</h3></div>' + gutHtml +
       '<div class="field"><label>Things to tell the candidate (about the role, pay, next steps)</label><textarea id="tellThem" rows="2">' + esc(iv.tellThem || '') + '</textarea></div>' +
-      '<div class="section-title" style="margin-top:1.8rem"><h3>📄 Resume / notes</h3></div>' +
-      '<div class="field"><textarea id="resume" rows="5" placeholder="Paste their resume or any notes here…">' + esc(c.resume_text || '') + '</textarea></div><button class="btn btn-ghost btn-sm" id="saveResume">Save resume</button>',
+      '<div class="section-title" style="margin-top:1.8rem"><h3>📄 Resume &amp; notes</h3><label class="btn btn-ghost btn-sm" style="cursor:pointer">⬆ Upload resume<input type="file" id="resumeFile" accept=".pdf,.doc,.docx" style="display:none"></label></div>' +
+      resumeFilesHtml +
+      '<div class="field"><textarea id="resume" rows="4" placeholder="Or paste their resume / any notes here…">' + esc(c.resume_text || '') + '</textarea></div><button class="btn btn-ghost btn-sm" id="saveResume">Save notes</button>',
       '<a href="#/hiring">Hiring</a>');
 
     const cA = $('#copyApp'); if (cA) cA.onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(link); toast('Application link copied — text or email it'); };
@@ -962,6 +975,10 @@
       toast('Interview saved'); if (status !== c.status) viewCandidate(id);
     };
     const sr = $('#saveResume'); if (sr) sr.onclick = async () => { await api('PATCH', '/candidates/' + id, { resume_text: $('#resume').value }); toast('Saved'); };
+    const sb = $('#schedBtn'); if (sb) sb.onclick = () => openScheduleInterview(c);
+    const sa = $('#sendAppBtn'); if (sa) sa.onclick = async () => { const r = await api('POST', '/candidates/' + id + '/send-application'); toast(r.sent ? 'Form emailed to ' + r.to + ' 📨' : (r.reason === 'not_configured' ? 'Email not connected — copy the link instead' : r.reason === 'no_email' ? 'No email on file' : 'Could not send'), r.sent ? undefined : 'error'); };
+    const rfu = $('#resumeFile'); if (rfu) rfu.onchange = async (e) => { const file = e.target.files[0]; if (!file) return; if (file.size > 6 * 1024 * 1024) { toast('File too big (max ~6MB)', 'error'); return; } toast('Uploading…'); const data = await fileToB64(file); await api('POST', '/candidates/' + id + '/files', { kind: 'resume', name: file.name, mime: file.type || 'application/octet-stream', data: data }); toast('Resume uploaded'); viewCandidate(id); };
+    root().querySelectorAll('.cfile-del').forEach((b) => { b.onclick = async () => { await api('DELETE', '/candidate-files/' + b.getAttribute('data-id')); viewCandidate(id); }; });
     const mo = $('#makeOffer'); if (mo) mo.onclick = () => openOffer(c);
     const mo2 = $('#makeOffer2'); if (mo2) mo2.onclick = () => openOffer(c);
     const ma = $('#markAccepted'); if (ma) ma.onclick = async () => { await api('PATCH', '/candidates/' + id, { status: 'accepted' }); toast('Marked as accepted'); viewCandidate(id); };
@@ -969,7 +986,21 @@
     const ar = $('#addReferee'); if (ar) ar.onclick = () => openAddReferee(id);
     root().querySelectorAll('.ref-copy').forEach((b) => { b.onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(b.getAttribute('data-l')); toast('Reference link copied'); }; });
     root().querySelectorAll('.ref-email').forEach((b) => { b.onclick = () => { const r = refs.find((x) => x.id === b.getAttribute('data-id')); if (r) openRefEmail(r, refKit, c); }; });
+    root().querySelectorAll('.ref-send').forEach((b) => { b.onclick = async () => { const res = await api('POST', '/references/' + b.getAttribute('data-id') + '/send'); toast(res.sent ? 'Reference request emailed to ' + res.to + ' 📨' : (res.reason === 'not_configured' ? 'Email not connected — use Copy link instead' : 'Could not send'), res.sent ? undefined : 'error'); }; });
     root().querySelectorAll('.ref-fill').forEach((b) => { b.onclick = () => { const r = refs.find((x) => x.id === b.getAttribute('data-id')); if (r) openReferenceAnswers(r, refKit, c); }; });
+  }
+
+  function openScheduleInterview(c) {
+    const s = c.schedule || {};
+    openModal('<h2>Schedule interview — ' + esc(c.name.split(' ')[0]) + '</h2>' +
+      '<div class="field"><label>Date &amp; time</label><input type="datetime-local" id="ivWhen" value="' + (s.scheduled_at ? toLocalInput(s.scheduled_at) : '') + '"></div>' +
+      '<div class="field"><label>Where</label><input id="ivWhere" value="' + esc(s.location || '') + '" placeholder="e.g. Newcastle lab, or a video link"></div>' +
+      '<div class="field"><label>Notes for yourself (optional)</label><textarea id="ivNote" rows="2" placeholder="Who else is sitting in, things to probe…">' + esc(s.note || '') + '</textarea></div>' +
+      (c.email ? '<div class="muted" style="font-size:.84rem;margin-bottom:.6rem">With email connected, their pre-fill form auto-sends the day before and you\'ll get a reminder 4 hours before.</div>' : '') +
+      '<div class="modal-foot">' + (s.scheduled_at ? '<button class="btn btn-ghost" id="ivClear">Cancel interview</button>' : '<button class="btn btn-ghost" id="ivCancel">Cancel</button>') + '<button class="btn btn-primary" id="ivSave">Save</button></div>');
+    $('#ivSave').onclick = async () => { const w = $('#ivWhen').value; if (!w) { toast('Pick a time', 'error'); return; } await api('PUT', '/candidates/' + c.id + '/interview-time', { scheduled_at: new Date(w).toISOString(), location: $('#ivWhere').value.trim(), note: $('#ivNote').value.trim() }); closeModal(); toast('Interview booked 📅'); viewCandidate(c.id); };
+    const cl = $('#ivClear'); if (cl) cl.onclick = async () => { await api('DELETE', '/candidates/' + c.id + '/interview-time'); closeModal(); toast('Interview cleared'); viewCandidate(c.id); };
+    const ca = $('#ivCancel'); if (ca) ca.onclick = closeModal;
   }
 
   async function openAddReferee(candidateId) {

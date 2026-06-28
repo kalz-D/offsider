@@ -158,6 +158,13 @@ const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS allowances (
     id TEXT PRIMARY KEY, business_id TEXT NOT NULL, employee_id TEXT NOT NULL, name TEXT, amount REAL, basis TEXT, note TEXT, created_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS candidate_files (
+    id TEXT PRIMARY KEY, business_id TEXT NOT NULL, candidate_id TEXT NOT NULL, kind TEXT, name TEXT, mime TEXT, data TEXT, created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS interviews (
+    candidate_id TEXT PRIMARY KEY, business_id TEXT NOT NULL, scheduled_at TEXT, location TEXT, note TEXT,
+    prefill_sent INTEGER DEFAULT 0, reminder_sent INTEGER DEFAULT 0, updated_at TEXT
+  );
   CREATE INDEX IF NOT EXISTS idx_users_business ON users(business_id);
   CREATE INDEX IF NOT EXISTS idx_emp_business   ON employees(business_id);
   CREATE INDEX IF NOT EXISTS idx_cases_business ON cases(business_id);

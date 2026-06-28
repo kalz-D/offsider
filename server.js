@@ -50,6 +50,7 @@ async function sendEmail({ to, subject, text, attachments }) {
   try { await t.sendMail({ from: MAIL.from, to, subject, text, attachments: attachments || [] }); return { sent: true }; }
   catch (e) { console.error('email send failed:', e.message); return { sent: false, reason: 'send_failed', error: e.message }; }
 }
+function fmtWhen(iso) { try { return new Date(iso).toLocaleString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }); } catch (e) { return iso; } }
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -322,6 +323,31 @@ app.post('/api/public/reference/:token', h(async (req, res) => {
   if (!b.answers || typeof b.answers !== 'object') return res.status(400).json({ error: 'No answers were sent.' });
   await db.prepare('UPDATE candidate_references SET answers=?, status=?, updated_at=? WHERE id=?').run(JSON.stringify(b.answers), 'received', now(), r.id);
   res.json({ ok: true });
+}));
+
+// ---------- cron hook (no login; guarded by CRON_SECRET) ----------
+// Wire a free cron (e.g. cron-job.org) to GET /api/cron/run?key=YOUR_SECRET every ~15 min.
+// Sends the pre-fill form ~24h before an interview, and reminds the manager ~4h before.
+app.get('/api/cron/run', h(async (req, res) => {
+  if (!process.env.CRON_SECRET || req.query.key !== process.env.CRON_SECRET) return res.status(403).json({ error: 'forbidden' });
+  const nowMs = Date.now();
+  let prefillSent = 0, remindersSent = 0;
+  const host = req.get('host');
+  const rows = await db.prepare('SELECT i.*, c.name AS candidate_name, c.email AS candidate_email, c.token AS candidate_token, c.application AS application FROM interviews i JOIN candidates c ON c.id=i.candidate_id WHERE i.scheduled_at IS NOT NULL').all();
+  for (const i of rows) {
+    const t = Date.parse(i.scheduled_at); if (isNaN(t)) continue;
+    const hoursTo = (t - nowMs) / 3600000;
+    if (!i.prefill_sent && !i.application && i.candidate_email && hoursTo <= 24 && hoursTo > 0) {
+      const link = 'https://' + host + '/c/' + i.candidate_token;
+      const r = await sendEmail({ to: i.candidate_email, subject: 'Quick form before your interview', text: 'Hi ' + (i.candidate_name || '').split(' ')[0] + ',\n\nLooking forward to your interview. Could you fill out this quick form beforehand? Takes a couple of minutes.\n\n' + link + '\n\nCheers' });
+      if (r.sent) { await db.prepare('UPDATE interviews SET prefill_sent=1 WHERE candidate_id=?').run(i.candidate_id); prefillSent++; }
+    }
+    if (!i.reminder_sent && hoursTo <= 4 && hoursTo > 0) {
+      await notifyManagers(i.business_id, 'interview', 'Interview soon — ' + i.candidate_name, fmtWhen(i.scheduled_at) + (i.location ? ' · ' + i.location : ''), '#/candidate/' + i.candidate_id, null);
+      await db.prepare('UPDATE interviews SET reminder_sent=1 WHERE candidate_id=?').run(i.candidate_id); remindersSent++;
+    }
+  }
+  res.json({ ok: true, prefillSent, remindersSent });
 }));
 
 // ---------- everything below requires a login ----------
@@ -877,7 +903,9 @@ app.post('/api/candidates', h(async (req, res) => {
 app.get('/api/candidates/:id', h(async (req, res) => {
   const c = await db.prepare('SELECT * FROM candidates WHERE id = ? AND business_id = ?').get(req.params.id, req.business.id);
   if (!c) return res.status(404).json({ error: 'Not found' });
-  res.json({ ...c, application: safeParse(c.application, null), interview: safeParse(c.interview, null), offer: safeParse(c.offer, null) });
+  const sched = await db.prepare('SELECT * FROM interviews WHERE candidate_id = ?').get(c.id);
+  const files = await db.prepare('SELECT id, kind, name, mime, created_at FROM candidate_files WHERE candidate_id = ? ORDER BY created_at DESC').all(c.id);
+  res.json({ ...c, application: safeParse(c.application, null), interview: safeParse(c.interview, null), offer: safeParse(c.offer, null), schedule: sched ? { scheduled_at: sched.scheduled_at, location: sched.location, note: sched.note } : null, files });
 }));
 app.patch('/api/candidates/:id', h(async (req, res) => {
   const c = await db.prepare('SELECT * FROM candidates WHERE id = ? AND business_id = ?').get(req.params.id, req.business.id);
@@ -918,6 +946,72 @@ app.post('/api/candidates/:id/hire', h(async (req, res) => {
   }
   await db.prepare('UPDATE candidates SET status=?, hired_employee_id=?, updated_at=? WHERE id=?').run('hired', empId, now(), c.id);
   res.json({ employee_id: empId });
+}));
+
+// candidate files (resume etc.)
+app.post('/api/candidates/:id/files', h(async (req, res) => {
+  const c = await db.prepare('SELECT id FROM candidates WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  const b = req.body || {};
+  if (!b.name || !b.data) return res.status(400).json({ error: 'No file.' });
+  const data = String(b.data).replace(/^data:[^,]*,/, '');
+  if (Math.floor(data.length * 3 / 4) > 6 * 1024 * 1024) return res.status(413).json({ error: 'File too big — keep it under about 6MB.' });
+  const id = uid();
+  await db.prepare('INSERT INTO candidate_files (id, business_id, candidate_id, kind, name, mime, data, created_at) VALUES (?,?,?,?,?,?,?,?)')
+    .run(id, req.business.id, c.id, b.kind || 'resume', b.name, b.mime || 'application/octet-stream', data, now());
+  res.json({ ok: true, id });
+}));
+app.get('/api/candidate-files/:id/download', h(async (req, res) => {
+  const f = await db.prepare('SELECT * FROM candidate_files WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!f) return res.status(404).send('Not found');
+  res.setHeader('Content-Type', f.mime || 'application/octet-stream');
+  res.setHeader('Content-Disposition', 'inline; filename="' + String(f.name || 'file').replace(/[^\w.\- ]/g, '_') + '"');
+  res.send(Buffer.from(f.data, 'base64'));
+}));
+app.delete('/api/candidate-files/:id', h(async (req, res) => {
+  await db.prepare('DELETE FROM candidate_files WHERE id=? AND business_id=?').run(req.params.id, req.business.id);
+  res.json({ ok: true });
+}));
+
+// interview scheduling
+app.put('/api/candidates/:id/interview-time', h(async (req, res) => {
+  const c = await db.prepare('SELECT id, name FROM candidates WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  const b = req.body || {};
+  const ex = await db.prepare('SELECT candidate_id FROM interviews WHERE candidate_id=?').get(c.id);
+  if (ex) await db.prepare('UPDATE interviews SET scheduled_at=?, location=?, note=?, prefill_sent=0, reminder_sent=0, updated_at=? WHERE candidate_id=?').run(b.scheduled_at || null, b.location || null, b.note || null, now(), c.id);
+  else await db.prepare('INSERT INTO interviews (candidate_id, business_id, scheduled_at, location, note, updated_at) VALUES (?,?,?,?,?,?)').run(c.id, req.business.id, b.scheduled_at || null, b.location || null, b.note || null, now());
+  if (b.scheduled_at) await notifyManagers(req.business.id, 'interview', 'Interview booked — ' + c.name, fmtWhen(b.scheduled_at) + (b.location ? ' · ' + b.location : ''), '#/candidate/' + c.id, null);
+  res.json({ ok: true });
+}));
+app.delete('/api/candidates/:id/interview-time', h(async (req, res) => {
+  await db.prepare('DELETE FROM interviews WHERE candidate_id=? AND business_id=?').run(req.params.id, req.business.id);
+  res.json({ ok: true });
+}));
+app.get('/api/interviews/upcoming', h(async (req, res) => {
+  res.json(await db.prepare('SELECT i.*, c.name AS candidate_name, c.role_applied FROM interviews i JOIN candidates c ON c.id=i.candidate_id WHERE i.business_id=? AND i.scheduled_at IS NOT NULL ORDER BY i.scheduled_at').all(req.business.id));
+}));
+
+// email the application form / a reference request (uses the email integration)
+app.post('/api/candidates/:id/send-application', h(async (req, res) => {
+  const c = await db.prepare('SELECT * FROM candidates WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  if (!c.email) return res.json({ sent: false, reason: 'no_email' });
+  const link = 'https://' + req.get('host') + '/c/' + c.token;
+  const fn = c.name.split(' ')[0];
+  const body = 'Hi ' + fn + ',\n\nThanks for your interest in the ' + (c.role_applied || 'role') + ' at ' + req.business.name + '. Before we have a chat, could you fill out this quick form? It only takes a couple of minutes.\n\n' + link + '\n\nCheers,\n' + req.user.name + '\n' + req.business.name;
+  const r = await sendEmail({ to: c.email, subject: 'Quick application form — ' + req.business.name, text: body });
+  res.json(Object.assign({ to: c.email, link }, r));
+}));
+app.post('/api/references/:id/send', h(async (req, res) => {
+  const r = await db.prepare('SELECT * FROM candidate_references WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!r) return res.status(404).json({ error: 'Not found' });
+  if (!r.email) return res.json({ sent: false, reason: 'no_email' });
+  const c = await db.prepare('SELECT name, role_applied FROM candidates WHERE id=?').get(r.candidate_id);
+  const link = 'https://' + req.get('host') + '/r/' + r.token;
+  const body = 'Hi ' + (r.referee_name || 'there') + ',\n\n' + req.user.name + ' from ' + req.business.name + ' here. ' + (c ? c.name : 'A candidate') + ' has applied for ' + (c && c.role_applied ? 'the ' + c.role_applied + ' role' : 'a role') + ' and listed you as a referee. Could you fill out a short, confidential reference here? It only takes a few minutes:\n\n' + link + '\n\nThanks very much,\n' + req.user.name + '\n' + req.business.name;
+  const er = await sendEmail({ to: r.email, subject: 'Reference request — ' + (c ? c.name : 'a candidate'), text: body });
+  res.json(Object.assign({ to: r.email, link }, er));
 }));
 
 // ---------- worker-app management: plans, productivity, leave, suggestions ----------
