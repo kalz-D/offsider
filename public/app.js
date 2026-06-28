@@ -889,7 +889,7 @@
       (it.why ? '<div class="iq-why">' + esc(it.why) + '</div>' : '') + '</div>';
     const lawfulHtml = Object.keys(groups).map((cat) => '<div class="iq-group"><div class="iq-cat">' + esc(cat) + '</div>' + groups[cat].map(qRow).join('') + '</div>').join('');
     const jobHtml = '<div class="iq-group"><div class="iq-cat">✅ Can they do the job? <span class="muted" style="font-weight:400">(always lawful — ask about the work)</span></div>' + jobG.map(qRow).join('') + '</div>';
-    const dnaHtml = (kit.doNotAsk || []).map((d) => '<div class="dna-item"><div class="dna-topic">🚫 ' + esc(d.topic) + '</div>' + (d.example ? '<div class="dna-eg">Avoid: ' + esc(d.example) + '</div>' : '') + '<div class="dna-why">' + esc(d.why) + '</div><div class="dna-instead">✅ Instead: ' + esc(d.insteadAsk) + '</div></div>').join('');
+    const dnaHtml = (kit.doNotAsk || []).map((d) => '<div class="dna-item"><div class="dna-topic">🚫 ' + esc(d.topic) + ' ' + refChip('recruitment', d.topic, d.topic) + '</div>' + (d.example ? '<div class="dna-eg">Avoid: ' + esc(d.example) + '</div>' : '') + '<div class="dna-why">' + esc(d.why) + '</div><div class="dna-instead">✅ Instead: ' + esc(d.insteadAsk) + '</div></div>').join('');
     const gutHtml = (kit.gutFeelPrompts || []).map((p, i) => '<div class="field"><label>' + esc(p) + '</label><textarea data-gut="G' + i + '" rows="2">' + esc(iv.gut['G' + i] || '') + '</textarea></div>').join('');
 
     // offer / hire actions
@@ -909,7 +909,7 @@
       return '<div class="card card-pad" style="margin-bottom:.6rem"><div><strong>' + esc(r.referee_name || 'Referee') + '</strong> ' + sb + '<div class="muted" style="font-size:.86rem">' + [r.relationship, r.company, r.phone, r.email].filter(Boolean).map(esc).join(' · ') + '</div></div><div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.6rem"><button class="btn btn-ghost btn-sm ref-copy" data-l="' + esc(rlink) + '">📋 Copy link</button><button class="btn btn-ghost btn-sm ref-email" data-id="' + r.id + '">✉️ Email text</button><button class="btn btn-primary btn-sm ref-fill" data-id="' + r.id + '">' + (r.status === 'received' ? 'Edit answers' : 'Record by phone') + '</button></div>' + ans + '</div>';
     };
     const refSection = '<div class="section-title" style="margin-top:1.8rem"><h3>📞 Reference checks</h3><button class="btn btn-primary btn-sm" id="addReferee">+ Add a referee</button></div>' +
-      '<details class="dna" style="border-color:var(--brand);background:var(--brand-50)"><summary style="color:var(--brand)">📋 How to run a reference call (script + what to ask)</summary><div class="dna-body"><p style="margin:.6rem 0;white-space:pre-wrap">' + esc(fillRef(refKit.intro)) + '</p><div class="dna-instead">' + esc(refKit.lawfulNote || '') + '</div></div></details>' +
+      '<details class="dna" style="border-color:var(--brand);background:var(--brand-50)"><summary style="color:var(--brand)">📋 How to run a reference call (script + what to ask)</summary><div class="dna-body"><p style="margin:.6rem 0;white-space:pre-wrap">' + esc(fillRef(refKit.intro)) + '</p><div class="dna-instead">' + esc(refKit.lawfulNote || '') + ' ' + refChip('references', 'reference checking privacy consent discrimination', 'Reference checks') + '</div></div></details>' +
       (refs.length ? refs.map(refRow).join('') : '<div class="muted">No referees yet. Add one, then send them a link to fill out — or call them and record their answers.</div>');
 
     const header = '<div><h1 style="margin:0 0 .15rem">' + esc(c.name) + '</h1><div class="muted">' + esc(c.role_applied || 'Role TBC') + ' &nbsp;·&nbsp; ' + statusBadge(c.status) + '</div>' +
@@ -920,7 +920,7 @@
       '<div class="section-title" style="margin-top:1.4rem"><h3>📋 Application</h3></div>' + appHtml +
       actionHtml +
       '<div class="section-title" style="margin-top:1.8rem"><h3>🎤 Interview</h3><button class="btn btn-primary btn-sm" id="saveIv">Save interview</button></div>' +
-      '<div class="guard-banner">🧭 <strong>Ask about the job, not the person.</strong> Tick what you asked and jot their answers — every question below is lawful to ask.</div>' +
+      '<div class="guard-banner">🧭 <strong>Ask about the job, not the person.</strong> Tick what you asked and jot their answers — every question below is lawful to ask. ' + refChip('recruitment', 'protected attributes discrimination interview hiring', 'Lawful interview questions') + '</div>' +
       lawfulHtml + jobHtml +
       '<details class="dna"><summary>⚠️ Questions you must NOT ask — and what to ask instead</summary><div class="dna-body">' + dnaHtml + '</div></details>' +
       refSection +
@@ -1139,7 +1139,7 @@
 
     layout('team', e.name,
       header + scheduleSection +
-      '<div class="section-title" style="margin-top:1.8rem"><h3>💰 Pay & progression</h3></div>' + wagePanel +
+      '<div class="section-title" style="margin-top:1.8rem"><h3>💰 Pay & progression ' + refChip('pay', 'award classification minimum wage pay slip records', 'Pay, awards &amp; records') + '</h3></div>' + wagePanel +
       '<div class="section-title" style="margin-top:1.8rem"><h3>🚀 Development</h3></div>' + devPanel +
       lessonsSection + planSection +
       '<div class="section-title" style="margin-top:1.8rem"><h3>📝 Notes & observations</h3></div>' + notesList + noteForm +
@@ -1211,10 +1211,10 @@
     const content =
       '<div class="disclaimer-note" style="margin-bottom:1.6rem">⚠️ ' + esc(co.disclaimer || 'Offsider gives general good-practice guidance, not legal advice.') + '</div>' +
       '<a href="#/legal" class="panel" style="display:flex;align-items:center;gap:.8rem;margin-bottom:1.6rem;text-decoration:none"><span style="font-size:1.6rem">📚</span><span class="grow"><strong>Want the law behind it?</strong><div class="muted" style="font-size:.9rem">See the sources and references each piece of guidance is based on.</div></span><span class="meta">Legal backing →</span></a>' +
-      '<div class="section-title"><h3>' + esc(co.fairProcessTitle || 'What a fair process looks like') + '</h3></div>' +
+      '<div class="section-title"><h3>' + esc(co.fairProcessTitle || 'What a fair process looks like') + ' ' + refChip('performance', 'fair process underperformance warning procedural fairness dismissal', 'A fair process') + '</h3></div>' +
       '<div class="grid" style="gap:1.2rem">' + fp + '</div>' +
       (co.smallBusinessCode ? '<div class="panel section-ink" style="margin-top:1.6rem;background:var(--brand);color:#eaf1f6"><h3 style="color:#fff">Small Business Fair Dismissal Code</h3><p style="margin:0;color:#cfe0ea">' + esc(co.smallBusinessCode) + '</p></div>' : '') +
-      '<div class="section-title" style="margin-top:1.8rem"><h3>Going up the ladder</h3></div>' + ladder +
+      '<div class="section-title" style="margin-top:1.8rem"><h3>Going up the ladder ' + refChip('performance', 'warning termination dismissal unfair', 'Warnings &amp; ending employment') + '</h3></div>' + ladder +
       '<div class="section-title" style="margin-top:1.8rem"><h3>When to stop and get real advice</h3></div><div class="card card-pad"><ul class="problem-list" style="margin:0">' + help.replace(/<li>/g, '<li style="color:var(--ink-soft)">') + '</ul></div>' +
       '<div class="section-title" style="margin-top:1.8rem"><h3>Plain-English glossary</h3></div>' + glossary;
     layout('guide', 'Fair Work guide', content);
@@ -1309,13 +1309,27 @@
   }
 
   // ---------------- LEGAL backing / references ----------------
+  function confBadge(c) { return c === 'high' ? '<span class="badge badge-positive">verified</span>' : (c === 'low' ? '<span class="badge badge-watchful">check source</span>' : '<span class="badge">general</span>'); }
+  function srcLink(s) { return s.url ? '<a href="' + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.name) + (s.citation ? ' — ' + esc(s.citation) : '') + ' ↗</a>' : '<span>' + esc(s.name) + (s.citation ? ' — ' + esc(s.citation) : '') + '</span>'; }
+  function legalRefHtml(r) { return '<div class="legal-ref"><div class="lr-top"><strong>' + esc(r.topic) + '</strong> ' + confBadge(r.confidence) + '</div><div class="lr-claim">' + esc(r.claim) + '</div><div class="lr-basis">' + esc(r.basis) + '</div><div class="lr-src">' + (r.sources || []).map((s) => '<div>📎 ' + srcLink(s) + '</div>').join('') + '</div></div>'; }
+  // a small inline "📎 source" chip that links guidance to its legal backing
+  function refChip(domain, kw, title) { return '<button type="button" class="ref-chip" data-domain="' + esc(domain) + '" data-kw="' + esc(kw || '') + '" data-title="' + esc(title || '') + '">📎 source</button>'; }
+  async function openSources(domain, kw, title) {
+    const lr = await getLegalRefs();
+    const d = (lr.domains || []).find((x) => x.id === domain);
+    if (!d) { toast('No references found'); return; }
+    let refs = d.references || [];
+    if (kw) { const words = kw.toLowerCase().split(/[\s,/]+/).filter((w) => w.length > 3); const f = refs.filter((r) => { const hay = (r.topic + ' ' + r.claim + ' ' + r.basis + ' ' + (r.appArea || '')).toLowerCase(); return words.some((w) => hay.includes(w)); }); if (f.length) refs = f; }
+    openModal('<h2>📎 The law behind this</h2><p class="muted">' + esc(title || d.title) + ' — from Offsider\'s legal backing. General info, not legal advice.</p>' + refs.map(legalRefHtml).join('') + '<div class="modal-foot"><a href="#/legal" class="btn btn-ghost" id="srcAll">All legal backing →</a><button class="btn btn-primary" id="srcClose">Close</button></div>');
+    $('#srcClose').onclick = closeModal;
+    $('#srcAll').onclick = closeModal;
+  }
+
   async function viewLegal() {
     const lr = await getLegalRefs();
-    const confBadge = (c) => c === 'high' ? '<span class="badge badge-positive">verified</span>' : (c === 'low' ? '<span class="badge badge-watchful">check source</span>' : '<span class="badge">general</span>');
-    const srcLink = (s) => s.url ? '<a href="' + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.name) + (s.citation ? ' — ' + esc(s.citation) : '') + ' ↗</a>' : '<span>' + esc(s.name) + (s.citation ? ' — ' + esc(s.citation) : '') + '</span>';
     const domainCard = (d) => {
       const prim = (d.primarySources || []).map((s) => '<a class="src-chip" href="' + esc(s.url || '#') + '" target="_blank" rel="noopener">' + esc(s.name) + ' ↗</a>').join('');
-      const refs = (d.references || []).map((r) => '<div class="legal-ref"><div class="lr-top"><strong>' + esc(r.topic) + '</strong> ' + confBadge(r.confidence) + '</div><div class="lr-claim">' + esc(r.claim) + '</div><div class="lr-basis">' + esc(r.basis) + '</div><div class="lr-src">' + (r.sources || []).map((s) => '<div>📎 ' + srcLink(s) + '</div>').join('') + '</div>' + (r.appArea ? '<div class="lr-app">↪ In Offsider: ' + esc(r.appArea) + '</div>' : '') + '</div>').join('');
+      const refs = (d.references || []).map((r) => legalRefHtml(r).replace('</div></div>', '</div>' + (r.appArea ? '<div class="lr-app">↪ In Offsider: ' + esc(r.appArea) + '</div>' : '') + '</div>')).join('');
       return '<details class="legal-domain"><summary><span class="ld-title">' + (d.icon ? esc(d.icon) + ' ' : '') + esc(d.title) + '</span><span class="muted" style="font-size:.85rem">' + (d.references || []).length + ' refs</span></summary><div class="ld-body">' + (d.subtitle ? '<div class="ld-sub">' + esc(d.subtitle) + '</div>' : '') + '<p class="muted">' + esc(d.summary) + '</p>' + (prim ? '<div class="src-chips">' + prim + '</div>' : '') + refs + (d.verifierNotes ? '<div class="lr-note">✔︎ Fact-check: ' + esc(d.verifierNotes) + '</div>' : '') + '</div></details>';
     };
     const contacts = (lr.contacts || []).map((c) => '<a class="row" href="' + esc(c.url) + '" target="_blank" rel="noopener"><span class="ic-circle">🏛️</span><span class="grow"><span class="t">' + esc(c.name) + '</span><span class="s">' + esc(c.detail) + '</span></span><span class="meta">Visit ↗</span></a>').join('');
@@ -1549,7 +1563,7 @@
   function openLeaveRequest(kit) {
     const opts = (kit.leaveTypes || []).map((t) => '<option value="' + esc(t.label) + '">' + esc(t.label) + (t.paid ? '' : ' (unpaid)') + '</option>').join('');
     openModal('<h2>Request leave</h2>' + (kit.leaveTip ? '<p class="muted">' + esc(kit.leaveTip) + '</p>' : '') +
-      '<div class="field"><label>Type</label><select id="lvType">' + opts + '</select></div>' +
+      '<div class="field"><label>Type ' + refChip('leave', '', 'Leave entitlements (the NES)') + '</label><select id="lvType">' + opts + '</select></div>' +
       '<div class="grid grid-2"><div class="field"><label>From</label><input type="date" id="lvFrom" value="' + todayStr() + '"></div><div class="field"><label>To</label><input type="date" id="lvTo" value="' + todayStr() + '"></div></div>' +
       '<div class="field"><label>Note (optional)</label><textarea id="lvNote" rows="2" placeholder="Anything your manager should know"></textarea></div>' +
       '<div class="modal-foot"><button class="btn btn-ghost" id="lvCancel">Cancel</button><button class="btn btn-primary" id="lvSave">Send request</button></div>');
@@ -1647,6 +1661,7 @@
       await loadContent();
     } catch (e) { State.me = null; }
     window.addEventListener('hashchange', routeChanged);
+    document.addEventListener('click', (e) => { const c = e.target.closest && e.target.closest('.ref-chip'); if (c) { e.preventDefault(); openSources(c.getAttribute('data-domain'), c.getAttribute('data-kw'), c.getAttribute('data-title')); } });
     routeChanged();
   }
   boot();

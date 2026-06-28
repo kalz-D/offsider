@@ -536,3 +536,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
 .legal-ref .lr-app { font-size: .8rem; color: var(--ink-faint); margin-top: .3rem; font-style: italic; }
 .lr-note { font-size: .82rem; color: var(--ink-faint); background: var(--positive-50); border-radius: var(--r); padding: .55rem .75rem; margin-top: .8rem; }
 .legal-domain .ld-sub { font-size: .85rem; color: var(--ink-faint); font-style: italic; margin-bottom: .5rem; }
+
+/* inline "source" chips that link guidance to its legal backing */
+.ref-chip { display: inline-flex; align-items: center; gap: .15rem; background: var(--brand-50); border: 1px solid transparent; color: var(--brand-700); font-size: .72rem; font-weight: 700; cursor: pointer; padding: .1rem .45rem; border-radius: 999px; vertical-align: middle; line-height: 1.5; }
+.ref-chip:hover { border-color: var(--brand); }
