@@ -123,6 +123,107 @@ async function sendSms({ to, body }) {
   } catch (e) { console.error('sms send failed:', e.message); return { sent: false, reason: 'send_failed', error: e.message }; }
 }
 
+// ---------- AI résumé reader (OFF until ANTHROPIC_API_KEY is set in the environment) ----------
+// Reads an uploaded résumé (PDF, Word .docx, or a photo/image) with Claude and pulls the
+// applicant's name, email, phone, location + a short summary straight into their file.
+// Set ANTHROPIC_API_KEY to switch it on; optional ANTHROPIC_MODEL (defaults to claude-opus-4-8;
+// set claude-haiku-4-5 for a cheaper, faster read).
+const AI = { configured: !!process.env.ANTHROPIC_API_KEY, model: process.env.ANTHROPIC_MODEL || 'claude-opus-4-8' };
+let anthropicClient = null;
+function getAnthropic() {
+  if (!AI.configured) return null;
+  if (!anthropicClient) { const Anthropic = require('@anthropic-ai/sdk'); anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }); }
+  return anthropicClient;
+}
+const RESUME_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    name: { type: 'string', description: "The applicant's own full name (not a referee or past employer). Empty string if unclear." },
+    email: { type: 'string', description: 'Their email address, or empty string.' },
+    phone: { type: 'string', description: 'Their phone number as written, or empty string.' },
+    location: { type: 'string', description: 'Their suburb / city / state, or empty string.' },
+    current_role: { type: 'string', description: 'Their most recent job title, or empty string.' },
+    summary: { type: 'string', description: 'One plain-English sentence on who they are and their experience (max ~25 words).' },
+    skills: { type: 'array', items: { type: 'string' }, description: 'Up to 8 short skill, ticket or licence keywords.' }
+  },
+  required: ['name', 'email', 'phone', 'location', 'current_role', 'summary', 'skills']
+};
+// Build the user-message content for Claude from a stored résumé file (base64) — or fall back to text.
+async function resumeToContent(file, resumeText) {
+  const mime = ((file && file.mime) || '').toLowerCase();
+  const fname = ((file && file.name) || '').toLowerCase();
+  if (file && file.data) {
+    if (mime.includes('pdf') || fname.endsWith('.pdf')) return [{ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: file.data } }];
+    if (mime.startsWith('image/')) return [{ type: 'image', source: { type: 'base64', media_type: mime, data: file.data } }];
+    if (mime.includes('wordprocessingml') || fname.endsWith('.docx')) {
+      try {
+        const mammoth = require('mammoth');
+        const out = await mammoth.extractRawText({ buffer: Buffer.from(file.data, 'base64') });
+        const txt = ((out && out.value) || '').trim();
+        if (txt) return [{ type: 'text', text: 'Résumé (extracted from a Word document):\n\n' + txt.slice(0, 60000) }];
+      } catch (e) { console.error('docx extract failed:', e.message); }
+    }
+  }
+  const fb = String(resumeText || '').trim();
+  if (fb) return [{ type: 'text', text: 'Applicant details / résumé text:\n\n' + fb.slice(0, 60000) }];
+  return null;
+}
+async function extractResumeFields(file, resumeText) {
+  const client = getAnthropic();
+  if (!client) return { ok: false, reason: 'not_configured' };
+  const blocks = await resumeToContent(file, resumeText);
+  if (!blocks) return { ok: false, reason: 'no_resume' };
+  blocks.push({ type: 'text', text: "Extract this job applicant's contact and profile details from the résumé above." });
+  try {
+    const resp = await client.messages.create({
+      model: AI.model,
+      max_tokens: 1024,
+      system: "You read a job applicant's résumé/CV and extract their details. Only use what is clearly present — never guess or invent a value; use an empty string when something is not stated. The name is the applicant's own, not a referee or an employer.",
+      messages: [{ role: 'user', content: blocks }],
+      output_config: { format: { type: 'json_schema', schema: RESUME_SCHEMA } }
+    });
+    const txt = ((resp.content || []).find((b) => b.type === 'text') || {}).text || '{}';
+    return { ok: true, fields: JSON.parse(txt) };
+  } catch (e) {
+    console.error('résumé AI parse failed:', e.message);
+    return { ok: false, reason: 'ai_failed', error: e.message };
+  }
+}
+function mergeResumeNote(existing, f) {
+  const marker = '✨ From their résumé';
+  let base = String(existing || '');
+  const idx = base.indexOf(marker);
+  if (idx >= 0) base = base.slice(0, idx).trim();
+  const tail = [];
+  if (f.current_role) tail.push('Now: ' + f.current_role);
+  if (f.location) tail.push(f.location);
+  let line = marker + ' — ' + (String(f.summary || '').trim() || '(no summary)');
+  if (tail.length) line += ' · ' + tail.join(' · ');
+  if (Array.isArray(f.skills) && f.skills.length) line += '\nSkills: ' + f.skills.slice(0, 8).join(', ');
+  return (base ? base + '\n\n' : '') + line;
+}
+const looksLikeEmail = (s) => /^[\w.+\-]+@[\w\-]+\.[\w.\-]+$/.test(String(s || '').trim());
+// Read a candidate's latest résumé with AI and fill in any blank name/email/phone (+ a short summary note).
+async function aiFillCandidateFromResume(businessId, candidateId, opts) {
+  opts = opts || {};
+  const c = await db.prepare('SELECT * FROM candidates WHERE id=? AND business_id=?').get(candidateId, businessId);
+  if (!c) return { ok: false, reason: 'not_found' };
+  const file = await db.prepare("SELECT name, mime, data FROM candidate_files WHERE candidate_id=? AND kind='resume' ORDER BY created_at DESC").get(candidateId);
+  const r = await extractResumeFields(file, c.resume_text);
+  if (!r.ok) return r;
+  const f = r.fields || {};
+  const overwrite = !!opts.overwrite;
+  const placeholderName = !c.name || /^new applicant$/i.test(String(c.name).trim());
+  const filled = [];
+  let name = c.name, email = c.email, phone = c.phone;
+  if (String(f.name || '').trim() && (overwrite || placeholderName)) { name = String(f.name).trim(); filled.push('name'); }
+  if (looksLikeEmail(f.email) && (overwrite || !c.email)) { email = String(f.email).trim(); filled.push('email'); }
+  if (String(f.phone || '').trim() && (overwrite || !c.phone)) { phone = String(f.phone).trim(); filled.push('phone'); }
+  const notes = mergeResumeNote(c.resume_text, f);
+  await db.prepare('UPDATE candidates SET name=?, email=?, phone=?, resume_text=?, updated_at=? WHERE id=?').run(name, email, phone, notes, now(), candidateId);
+  return { ok: true, filled, fields: f };
+}
+
 const app = express();
 const PORT = process.env.PORT || 4000;
 const PUBLIC = path.join(__dirname, 'public');
@@ -424,6 +525,7 @@ app.post('/api/public/job/:token/apply', h(async (req, res) => {
     if (Math.floor(data.length * 3 / 4) <= 6 * 1024 * 1024) {
       await db.prepare('INSERT INTO candidate_files (id, business_id, candidate_id, kind, name, mime, data, created_at) VALUES (?,?,?,?,?,?,?,?)')
         .run(uid(), job.business_id, id, 'resume', String(b.resume.name).slice(0, 200), b.resume.mime || 'application/octet-stream', data, now());
+      if (AI.configured) aiFillCandidateFromResume(job.business_id, id, {}).catch(() => {});
     }
   }
   await notifyManagers(job.business_id, 'application', 'New application — ' + String(b.name).trim(), (job.title || 'a role') + ' · applied via your careers page', '#/candidate/' + id, null);
@@ -449,6 +551,7 @@ app.post('/api/inbound/:bizId', h(async (req, res) => {
   }
   const parsed = parseApplicationEmail(subject, text);
   const id = await createApplicantCandidate(biz.id, parsed, { note: text || null, resume });
+  if (AI.configured) aiFillCandidateFromResume(biz.id, id, {}).catch(() => {});
   await notifyManagers(biz.id, 'application', 'New application — ' + parsed.name, 'Forwarded in from your job board', '#/candidate/' + id, null);
   res.json({ ok: true, id });
 }));
@@ -576,6 +679,7 @@ app.get('/api/app-kit', (req, res) => res.json({ worklog: worklogKit, leaveTypes
 app.get('/api/legal-refs', (req, res) => res.json(legalRefs));
 app.get('/api/email-status', (req, res) => res.json({ configured: MAIL.configured, from: MAIL.from }));
 app.get('/api/sms-status', (req, res) => res.json({ configured: SMS.configured, provider: SMS.provider }));
+app.get('/api/ai-status', (req, res) => res.json({ configured: AI.configured, model: AI.model }));
 app.get('/api/wellbeing', h(async (req, res) => {
   const st = await db.prepare('SELECT * FROM business_settings WHERE business_id = ?').get(req.business.id);
   const eap = (st && (st.eap_name || st.eap_phone || st.eap_url)) ? { name: st.eap_name, phone: st.eap_phone, url: st.eap_url, notes: st.eap_notes } : null;
@@ -1091,6 +1195,7 @@ app.post('/api/candidates/:id/files', h(async (req, res) => {
   const id = uid();
   await db.prepare('INSERT INTO candidate_files (id, business_id, candidate_id, kind, name, mime, data, created_at) VALUES (?,?,?,?,?,?,?,?)')
     .run(id, req.business.id, c.id, b.kind || 'resume', b.name, b.mime || 'application/octet-stream', data, now());
+  if (AI.configured && (b.kind || 'resume') === 'resume') aiFillCandidateFromResume(req.business.id, c.id, {}).catch(() => {});
   res.json({ ok: true, id });
 }));
 app.get('/api/candidate-files/:id/download', h(async (req, res) => {
@@ -1103,6 +1208,14 @@ app.get('/api/candidate-files/:id/download', h(async (req, res) => {
 app.delete('/api/candidate-files/:id', h(async (req, res) => {
   await db.prepare('DELETE FROM candidate_files WHERE id=? AND business_id=?').run(req.params.id, req.business.id);
   res.json({ ok: true });
+}));
+// AI: read the résumé and auto-fill the candidate's name / email / phone (+ a short summary)
+app.post('/api/candidates/:id/parse-resume', h(async (req, res) => {
+  const c = await db.prepare('SELECT id FROM candidates WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  if (!AI.configured) return res.json({ ok: false, reason: 'not_configured' });
+  const r = await aiFillCandidateFromResume(req.business.id, c.id, { overwrite: !!(req.body && req.body.overwrite) });
+  res.json(r);
 }));
 
 // interview scheduling
@@ -1169,6 +1282,7 @@ app.post('/api/candidates/from-email', h(async (req, res) => {
   if (b.email) parsed.email = b.email;
   if (b.phone) parsed.phone = b.phone;
   const id = await createApplicantCandidate(req.business.id, parsed, { role: b.role || null, note: text || null, resume: b.resume });
+  if (AI.configured) aiFillCandidateFromResume(req.business.id, id, {}).catch(() => {});
   res.json({ ok: true, id, parsed });
 }));
 

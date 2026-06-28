@@ -12,11 +12,13 @@
     "node": "22.x"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.106.0",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.3.0",
     "connect-pg-simple": "^9.0.1",
     "express": "^4.19.2",
     "express-session": "^1.18.0",
+    "mammoth": "^1.12.0",
     "nodemailer": "^6.10.1",
     "pg": "^8.13.1"
   }

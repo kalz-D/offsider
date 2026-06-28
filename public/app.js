@@ -968,7 +968,7 @@
   }
 
   async function viewCandidate(id) {
-    const [c, kit, refKit, refs] = await Promise.all([api('GET', '/candidates/' + id), getInterviewKit(), getReferenceKit(), api('GET', '/candidates/' + id + '/references')]);
+    const [c, kit, refKit, refs, aiStatus] = await Promise.all([api('GET', '/candidates/' + id), getInterviewKit(), getReferenceKit(), api('GET', '/candidates/' + id + '/references'), api('GET', '/ai-status').catch(() => ({ configured: false }))]);
     const link = location.origin + '/c/' + c.token;
     const iv = c.interview && typeof c.interview === 'object' ? c.interview : {};
     iv.asked = iv.asked || {}; iv.notes = iv.notes || {}; iv.gut = iv.gut || {};
@@ -1023,6 +1023,8 @@
       : '<div class="panel" style="margin:1.2rem 0;border-style:dashed"><strong>📅 Schedule the interview</strong><div class="muted" style="font-size:.9rem;margin:.2rem 0 .6rem">Pop in a time — you\'ll get a reminder, and (with email on) their form can auto-send the day before.</div><button class="btn btn-primary btn-sm" id="schedBtn">+ Book a time</button></div>';
     const resumeFiles = (c.files || []).filter((f) => f.kind === 'resume');
     const resumeFilesHtml = resumeFiles.length ? '<div class="row-list" style="margin-bottom:.6rem">' + resumeFiles.map((f) => '<div class="row" style="cursor:default"><span class="ic-circle">📎</span><span class="grow"><span class="t">' + esc(f.name) + '</span></span><span class="meta"><a href="/api/candidate-files/' + f.id + '/download" target="_blank" class="btn btn-ghost btn-sm">View</a> <button class="btn btn-ghost btn-sm cfile-del" data-id="' + f.id + '">✕</button></span></div>').join('') + '</div>' : '';
+    // ✨ AI résumé reader — show when there's a résumé (file or pasted text) to read
+    const aiReadBtn = (resumeFiles.length || c.resume_text) ? '<button class="btn btn-ghost btn-sm" id="aiReadResume" title="Let the AI read the résumé and fill in their name, email &amp; phone">✨ Read with AI</button>' : '';
 
     layout('hiring', c.name,
       header +
@@ -1036,7 +1038,8 @@
       refSection +
       '<div class="section-title" style="margin-top:1.4rem"><h3>🤔 Your read on them</h3></div>' + gutHtml +
       '<div class="field"><label>Things to tell the candidate (about the role, pay, next steps)</label><textarea id="tellThem" rows="2">' + esc(iv.tellThem || '') + '</textarea></div>' +
-      '<div class="section-title" style="margin-top:1.8rem"><h3>📄 Resume &amp; notes</h3><label class="btn btn-ghost btn-sm" style="cursor:pointer">⬆ Upload resume<input type="file" id="resumeFile" accept=".pdf,.doc,.docx" style="display:none"></label></div>' +
+      '<div class="section-title" style="margin-top:1.8rem"><h3>📄 Resume &amp; notes</h3><span style="display:flex;gap:.4rem;flex-wrap:wrap">' + aiReadBtn + '<label class="btn btn-ghost btn-sm" style="cursor:pointer">⬆ Upload resume<input type="file" id="resumeFile" accept=".pdf,.doc,.docx" style="display:none"></label></span></div>' +
+      (aiReadBtn && !aiStatus.configured ? '<div class="muted" style="font-size:.84rem;margin:-.4rem 0 .6rem">✨ Tip: switch on AI auto-fill by adding an <code>ANTHROPIC_API_KEY</code> — then résumés fill in name, email &amp; phone automatically.</div>' : '') +
       resumeFilesHtml +
       '<div class="field"><textarea id="resume" rows="4" placeholder="Or paste their resume / any notes here…">' + esc(c.resume_text || '') + '</textarea></div><button class="btn btn-ghost btn-sm" id="saveResume">Save notes</button>',
       '<a href="#/hiring">Hiring</a>');
@@ -1059,6 +1062,17 @@
     const sae2 = $('#sendAppEmail2'); if (sae2) sae2.onclick = async () => reportSend(await api('POST', '/candidates/' + id + '/send-application', { channel: 'email' }), 'email');
     const sas2 = $('#sendAppSms2'); if (sas2) sas2.onclick = async () => reportSend(await api('POST', '/candidates/' + id + '/send-application', { channel: 'sms' }), 'sms');
     const rfu = $('#resumeFile'); if (rfu) rfu.onchange = async (e) => { const file = e.target.files[0]; if (!file) return; if (file.size > 6 * 1024 * 1024) { toast('File too big (max ~6MB)', 'error'); return; } toast('Uploading…'); const data = await fileToB64(file); await api('POST', '/candidates/' + id + '/files', { kind: 'resume', name: file.name, mime: file.type || 'application/octet-stream', data: data }); toast('Resume uploaded'); viewCandidate(id); };
+    const air = $('#aiReadResume'); if (air) air.onclick = async () => {
+      const t0 = air.textContent; air.disabled = true; air.textContent = '✨ Reading…';
+      try {
+        const r = await api('POST', '/candidates/' + id + '/parse-resume', {});
+        if (r && r.ok) { toast(r.filled && r.filled.length ? '✨ Filled in their ' + r.filled.join(', ') + ' from the résumé' : '✨ Read the résumé — added a summary to the notes'); viewCandidate(id); return; }
+        air.disabled = false; air.textContent = t0;
+        if (r && r.reason === 'not_configured') toast('AI reading isn\'t switched on yet — add an ANTHROPIC_API_KEY to enable it', 'error');
+        else if (r && r.reason === 'no_resume') toast('No résumé to read yet — upload one first', 'error');
+        else toast('Couldn\'t read that one — give it another go', 'error');
+      } catch (err) { air.disabled = false; air.textContent = t0; toast('Couldn\'t read that one — give it another go', 'error'); }
+    };
     root().querySelectorAll('.cfile-del').forEach((b) => { b.onclick = async () => { await api('DELETE', '/candidate-files/' + b.getAttribute('data-id')); viewCandidate(id); }; });
     const mo = $('#makeOffer'); if (mo) mo.onclick = () => openOffer(c);
     const mo2 = $('#makeOffer2'); if (mo2) mo2.onclick = () => openOffer(c);
