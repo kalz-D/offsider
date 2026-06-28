@@ -870,7 +870,7 @@
       '<label class="btn btn-ghost btn-sm" style="margin-top:.4rem;cursor:pointer">' + (contract ? '↻ Replace contract' : '⬆ Upload contract') + '<input type="file" id="contractFile" accept=".pdf,.doc,.docx" style="display:none"></label>' +
       '<div style="margin-top:1rem"><strong>Sending by email</strong><div class="muted" style="font-size:.88rem;margin-top:.2rem">' + (emailStatus.configured ? '✅ Connected as <strong>' + esc(emailStatus.from) + '</strong> — you can email forms and offers straight from the app.' : '✉️ Not connected yet — copy-and-paste for now. Add your email’s SMTP details (env vars) to switch on one-click send.') + '</div></div>' +
       '<div style="margin-top:1rem"><strong>Texting (SMS)</strong><div class="muted" style="font-size:.88rem;margin-top:.2rem">' + (smsStatus.configured ? '✅ Connected via <strong>' + esc(smsStatus.provider) + '</strong> — you can text application forms, reference requests and offer links.' : '📱 Not connected. Sign up for <strong>ClickSend</strong> (Aussie, simplest) or <strong>Twilio</strong>, then add the API keys as env vars and the “Text” buttons go live. Texts go out as your business name.') + '</div>' +
-      (smsStatus.configured ? '<div style="display:flex;gap:.4rem;margin-top:.55rem;flex-wrap:wrap"><input id="smsTestTo" type="tel" placeholder="Your mobile, e.g. 0412 345 678" style="flex:1;min-width:12rem;padding:.45rem .6rem;border:1.5px solid var(--line-strong);border-radius:var(--r);font:inherit"><button class="btn btn-primary btn-sm" id="smsTestBtn">Send test text</button></div><div id="smsTestMsg" class="muted" style="font-size:.84rem;margin-top:.35rem">Text yourself to confirm it really sends — handy after first connecting.</div>' : '') +
+      (smsStatus.configured ? '<div style="display:flex;gap:.4rem;margin-top:.55rem;flex-wrap:wrap;align-items:center"><input id="smsTestTo" type="tel" placeholder="Your mobile, e.g. 0412 345 678" style="flex:1;min-width:12rem;padding:.45rem .6rem;border:1.5px solid var(--line-strong);border-radius:var(--r);font:inherit"><button class="btn btn-primary btn-sm" id="smsTestBtn">Send test text</button><button class="btn btn-ghost btn-sm" id="smsCheckBtn">Check connection</button></div><div class="muted" style="font-size:.84rem;margin-top:.35rem">Text yourself to confirm it works. If it says “sent” but nothing arrives, tap <strong>Check connection</strong> — or try <a href="#" id="smsTestPlain">sending without your sender name</a> (Aussie carriers often block letter-based sender names).</div><div id="smsTestMsg" class="muted" style="font-size:.84rem;margin-top:.3rem"></div>' : '') +
       '</div>' +
       '<div style="margin-top:1rem"><strong>Auto-import applications (advanced)</strong><div class="muted" style="font-size:.88rem;margin-top:.2rem">Use Seek/Indeed as normal, then just hit <strong>“📥 Import from email”</strong> below to drop an applicant (and resume) in — no setup. For fully automatic, point an inbound-email service (CloudMailin/SendGrid) at <code style="font-size:.8rem">/api/inbound/' + esc(State.me.business.id) + '?key=YOUR_SECRET</code> and forward your application emails there.</div></div>' +
       '</div></details>';
@@ -898,18 +898,37 @@
     const ie = $('#importEmail'); if (ie) ie.onclick = openImportEmail;
     const cf = $('#contractFile'); if (cf) cf.onchange = async (e) => { const file = e.target.files[0]; if (!file) return; if (file.size > 4 * 1024 * 1024) { toast('File too big (max ~4MB)', 'error'); return; } toast('Uploading…'); const data = await fileToB64(file); await api('POST', '/files', { kind: 'contract', name: file.name, mime: file.type || 'application/octet-stream', data: data }); toast('Contract saved'); viewHiring(); };
     const dc = $('#delContract'); if (dc) dc.onclick = async () => { await api('DELETE', '/files/' + contract.id); toast('Removed'); viewHiring(); };
-    const stb = $('#smsTestBtn'); if (stb) stb.onclick = async () => {
-      const to = ($('#smsTestTo').value || '').trim();
+    const runSmsTest = async (plain, trigger) => {
+      const inp = $('#smsTestTo'); const to = ((inp && inp.value) || '').trim();
       const msg = $('#smsTestMsg');
       if (!to) { msg.innerHTML = '<span style="color:#c0392b">Enter your mobile number first.</span>'; return; }
-      stb.disabled = true; const t0 = stb.textContent; stb.textContent = 'Sending…'; msg.textContent = 'Sending…';
+      const t0 = trigger ? trigger.textContent : '';
+      if (trigger) { trigger.disabled = true; trigger.textContent = 'Sending…'; }
+      msg.textContent = 'Sending…';
       try {
-        const r = await api('POST', '/sms/test', { to });
-        if (r && r.sent) msg.innerHTML = '✅ Sent to ' + esc(r.to) + ' — check your phone in a few seconds. <strong>ClickSend is connected.</strong>';
+        const r = await api('POST', '/sms/test', { to: to, plain: plain });
+        if (r && r.sent) msg.innerHTML = '✅ Sent to ' + esc(r.to) + ' as <strong>' + esc(r.sender || 'your number') + '</strong> — check your phone. If it doesn’t arrive within a minute, the sender name or number is the issue, not the connection.';
         else if (r && r.reason === 'not_configured') msg.innerHTML = '<span style="color:#c0392b">Not connected — the ClickSend keys aren’t set on the server yet.</span>';
-        else msg.innerHTML = '<span style="color:#c0392b">Didn’t go through' + (r && r.error ? ' — ' + esc(r.error) : '') + '.</span> Check the API key, your ClickSend balance, and that your sender name is allowed.';
+        else msg.innerHTML = '<span style="color:#c0392b">Didn’t go through' + (r && r.error ? ' — ' + esc(r.error) : '') + '.</span> Check the API key, your ClickSend balance, and that the sender name is allowed.';
       } catch (e) { msg.innerHTML = '<span style="color:#c0392b">Something went wrong — ' + esc(e.message) + '</span>'; }
-      stb.disabled = false; stb.textContent = t0;
+      if (trigger) { trigger.disabled = false; trigger.textContent = t0; }
+    };
+    const stb = $('#smsTestBtn'); if (stb) stb.onclick = () => runSmsTest(false, stb);
+    const stp = $('#smsTestPlain'); if (stp) stp.onclick = (e) => { e.preventDefault(); runSmsTest(true, null); };
+    const scb = $('#smsCheckBtn'); if (scb) scb.onclick = async () => {
+      const msg = $('#smsTestMsg'); const t0 = scb.textContent; scb.disabled = true; scb.textContent = 'Checking…'; msg.textContent = 'Checking…';
+      try {
+        const d = await api('GET', '/sms/diagnose');
+        if (!d || !d.configured) msg.innerHTML = '<span style="color:#c0392b">Not connected — the keys aren’t set on the server.</span>';
+        else if (d.auth_ok === false) msg.innerHTML = '<span style="color:#c0392b">❌ ClickSend rejected your keys' + (d.error ? ' — ' + esc(d.error) : '') + '.</span> Double-check the username and API key in Render.';
+        else if (d.auth_ok) {
+          const lowBal = (d.balance != null && !isNaN(Number(d.balance)) && Number(d.balance) <= 0);
+          const balLine = (d.balance != null) ? ('Balance: <strong>' + esc(d.balance) + '</strong>' + (lowBal ? ' <span style="color:#c0392b">— top up before texts will send.</span>' : '')) : '';
+          const senderLine = d.from ? ('Sending as “<strong>' + esc(d.from) + '</strong>”.' + (d.alpha ? ' ⚠️ That’s a letters-based sender name — Australian carriers often block these, so texts can show “sent” but never arrive. Fix: remove <code>CLICKSEND_FROM</code> in Render to send from a number, or register the name with ClickSend.' : '')) : 'Sending from a shared number.';
+          msg.innerHTML = '✅ Keys valid' + (d.username ? ' (' + esc(d.username) + ')' : '') + '. ' + balLine + '<br>' + senderLine;
+        } else msg.innerHTML = 'Connected via ' + esc(d.provider) + '. ' + (d.note ? esc(d.note) : '');
+      } catch (e) { msg.innerHTML = '<span style="color:#c0392b">Couldn’t check — ' + esc(e.message) + '</span>'; }
+      scb.disabled = false; scb.textContent = t0;
     };
     const pj = $('#postJob'); if (pj) pj.onclick = () => openJobModal(null);
     const cc = $('#copyCareers'); if (cc) cc.onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(careersLink); toast('Careers page link copied'); };

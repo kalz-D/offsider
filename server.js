@@ -119,21 +119,22 @@ function clickSendOutcome(httpOk, httpStatus, j, raw) {
   const why = (mStatus && up !== 'SUCCESS' && up !== 'QUEUED') ? mStatus : (respMsg || respCode || 'message not accepted');
   return { sent: false, reason: 'rejected', error: 'ClickSend: ' + why };
 }
-async function sendSms({ to, body }) {
+async function sendSms({ to, body, from }) {
   if (!SMS.configured) return { sent: false, reason: 'not_configured' };
   const num = toE164AU(to);
   if (!num) return { sent: false, reason: 'no_phone' };
+  const sender = (from === undefined ? SMS.from : from); // pass from:'' to drop the alphanumeric sender ID and send from a number
   try {
     if (SMS.provider === 'twilio') {
       const sid = process.env.TWILIO_ACCOUNT_SID;
       const auth = 'Basic ' + Buffer.from(sid + ':' + process.env.TWILIO_AUTH_TOKEN).toString('base64');
-      const r = await fetch('https://api.twilio.com/2010-04-01/Accounts/' + sid + '/Messages.json', { method: 'POST', headers: { Authorization: auth, 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ From: SMS.from, To: num, Body: body }) });
+      const r = await fetch('https://api.twilio.com/2010-04-01/Accounts/' + sid + '/Messages.json', { method: 'POST', headers: { Authorization: auth, 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ From: sender || SMS.from, To: num, Body: body }) });
       if (!r.ok) throw new Error('twilio ' + r.status + ' ' + (await r.text()).slice(0, 140));
       return { sent: true };
     }
     if (SMS.provider === 'clicksend') {
       const auth = 'Basic ' + Buffer.from(process.env.CLICKSEND_USERNAME + ':' + process.env.CLICKSEND_API_KEY).toString('base64');
-      const r = await fetch('https://rest.clicksend.com/v3/sms/send', { method: 'POST', headers: { Authorization: auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [{ source: 'offsider', from: SMS.from || undefined, to: num, body: body }] }) });
+      const r = await fetch('https://rest.clicksend.com/v3/sms/send', { method: 'POST', headers: { Authorization: auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [{ source: 'offsider', from: sender || undefined, to: num, body: body }] }) });
       const raw = await r.text();
       let j = null; try { j = JSON.parse(raw); } catch (e) {}
       return clickSendOutcome(r.ok, r.status, j, raw);
@@ -704,8 +705,26 @@ app.post('/api/sms/test', h(async (req, res) => {
   if (!SMS.configured) return res.json({ sent: false, reason: 'not_configured' });
   const to = (req.body && req.body.to ? String(req.body.to) : '').trim();
   if (!to || to.replace(/\D/g, '').length < 8) return res.status(400).json({ error: 'Enter a valid mobile number to text.' });
-  const r = await sendSms({ to, body: req.business.name + ': ✅ Your Offsider texting is connected. (Test message — no reply needed.)' });
-  res.json(Object.assign({ to: toE164AU(to), provider: SMS.provider }, r));
+  const plain = !!(req.body && req.body.plain); // plain = drop the sender name and send from a number (to rule out alphanumeric sender-ID blocking)
+  const opts = { to, body: req.business.name + ': Your Offsider texting is connected. (Test message — no reply needed.)' };
+  if (plain) opts.from = '';
+  const r = await sendSms(opts);
+  res.json(Object.assign({ to: toE164AU(to), provider: SMS.provider, sender: plain ? 'a shared number' : (SMS.from || 'a shared number') }, r));
+}));
+// Validate the ClickSend account (auth + balance) WITHOUT sending — separates "wrong key / no balance" from "delivered but blocked".
+app.get('/api/sms/diagnose', h(async (req, res) => {
+  if (!SMS.configured) return res.json({ configured: false });
+  const out = { configured: true, provider: SMS.provider, from: SMS.from || '', alpha: !!(SMS.from && /[A-Za-z]/.test(SMS.from)) };
+  if (SMS.provider === 'clicksend') {
+    try {
+      const auth = 'Basic ' + Buffer.from(process.env.CLICKSEND_USERNAME + ':' + process.env.CLICKSEND_API_KEY).toString('base64');
+      const r = await fetch('https://rest.clicksend.com/v3/account', { headers: { Authorization: auth } });
+      const raw = await r.text(); let j = null; try { j = JSON.parse(raw); } catch (e) {}
+      if (!r.ok) { out.auth_ok = false; out.error = 'ClickSend ' + r.status + ((j && j.response_msg) ? ' — ' + j.response_msg : ''); }
+      else { const d = (j && j.data) || {}; out.auth_ok = true; out.balance = (d.balance != null ? String(d.balance) : null); out.active = d.active; out.username = d.username || ''; }
+    } catch (e) { out.auth_ok = false; out.error = e.message; }
+  } else { out.auth_ok = null; out.note = 'Check your provider console for balance and sender setup.'; }
+  res.json(out);
 }));
 app.get('/api/wellbeing', h(async (req, res) => {
   const st = await db.prepare('SELECT * FROM business_settings WHERE business_id = ?').get(req.business.id);
