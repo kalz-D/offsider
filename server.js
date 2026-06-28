@@ -26,6 +26,8 @@ const worklogKit = require('./content/worklogKit');
 const leaveTypes = require('./content/leaveTypes');
 const suggestionKit = require('./content/suggestionKit');
 const legalRefs = require('./content/legalRefs');
+const managerAcademy = require('./content/managerAcademy');
+const wellbeingKit = require('./content/wellbeingKit');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -393,6 +395,11 @@ app.post('/api/me/lessons/:lessonId/submit', h(async (req, res) => {
 // ---------- shared (any logged-in user): app kit + legal refs + notifications ----------
 app.get('/api/app-kit', (req, res) => res.json({ worklog: worklogKit, leaveTypes: leaveTypes.types || [], leaveTip: leaveTypes.tip || '', suggestions: suggestionKit }));
 app.get('/api/legal-refs', (req, res) => res.json(legalRefs));
+app.get('/api/wellbeing', h(async (req, res) => {
+  const st = await db.prepare('SELECT * FROM business_settings WHERE business_id = ?').get(req.business.id);
+  const eap = (st && (st.eap_name || st.eap_phone || st.eap_url)) ? { name: st.eap_name, phone: st.eap_phone, url: st.eap_url, notes: st.eap_notes } : null;
+  res.json({ kit: wellbeingKit, eap });
+}));
 app.get('/api/notifications/mine', h(async (req, res) => {
   const rows = await db.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY read ASC, created_at DESC LIMIT 50').all(req.user.id);
   res.json(rows.map((n) => ({ id: n.id, kind: n.kind, title: n.title, body: n.body, link: n.link, read: !!n.read, created_at: n.created_at })));
@@ -944,6 +951,35 @@ app.get('/api/suggestions', h(async (req, res) => {
 }));
 app.post('/api/suggestions/:id/status', h(async (req, res) => {
   await db.prepare('UPDATE suggestions SET status=? WHERE id=? AND business_id=?').run((req.body || {}).status || 'seen', req.params.id, req.business.id);
+  res.json({ ok: true });
+}));
+
+// ---------- manager academy + EAP/wellbeing settings ----------
+app.get('/api/academy', h(async (req, res) => {
+  const rows = await db.prepare('SELECT lesson_id FROM academy_progress WHERE user_id = ?').all(req.user.id);
+  res.json({ intro: managerAcademy.intro, modules: managerAcademy.modules, done: rows.map((r) => r.lesson_id) });
+}));
+app.post('/api/academy/:lessonId', h(async (req, res) => {
+  const ex = await db.prepare('SELECT id FROM academy_progress WHERE user_id = ? AND lesson_id = ?').get(req.user.id, req.params.lessonId);
+  if (!ex) await db.prepare('INSERT INTO academy_progress (id, business_id, user_id, lesson_id, completed_at) VALUES (?,?,?,?,?)').run(uid(), req.business.id, req.user.id, req.params.lessonId, now());
+  res.json({ ok: true });
+}));
+app.delete('/api/academy/:lessonId', h(async (req, res) => {
+  await db.prepare('DELETE FROM academy_progress WHERE user_id = ? AND lesson_id = ?').run(req.user.id, req.params.lessonId);
+  res.json({ ok: true });
+}));
+app.post('/api/settings/eap', h(async (req, res) => {
+  const b = req.body || {};
+  const ex = await db.prepare('SELECT business_id FROM business_settings WHERE business_id = ?').get(req.business.id);
+  if (ex) await db.prepare('UPDATE business_settings SET eap_name=?, eap_phone=?, eap_url=?, eap_notes=?, updated_at=? WHERE business_id=?').run(b.eap_name || null, b.eap_phone || null, b.eap_url || null, b.eap_notes || null, now(), req.business.id);
+  else await db.prepare('INSERT INTO business_settings (business_id, eap_name, eap_phone, eap_url, eap_notes, updated_at) VALUES (?,?,?,?,?,?)').run(req.business.id, b.eap_name || null, b.eap_phone || null, b.eap_url || null, b.eap_notes || null, now());
+  res.json({ ok: true });
+}));
+app.post('/api/employees/:id/refer-eap', h(async (req, res) => {
+  const e = await db.prepare('SELECT * FROM employees WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!e) return res.status(404).json({ error: 'Not found' });
+  const note = (req.body || {}).note || 'Pointed them toward confidential support (EAP / crisis lines).';
+  await db.prepare('INSERT INTO notes (id, business_id, employee_id, kind, body, created_by, created_at) VALUES (?,?,?,?,?,?,?)').run(uid(), req.business.id, e.id, 'wellbeing', 'Wellbeing support: ' + note, req.user.id, now());
   res.json({ ok: true });
 }));
 

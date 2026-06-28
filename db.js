@@ -139,6 +139,12 @@ const SCHEMA_SQL = `
     id TEXT PRIMARY KEY, business_id TEXT NOT NULL, user_id TEXT NOT NULL, kind TEXT,
     title TEXT, body TEXT, link TEXT, read INTEGER DEFAULT 0, created_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS academy_progress (
+    id TEXT PRIMARY KEY, business_id TEXT NOT NULL, user_id TEXT NOT NULL, lesson_id TEXT NOT NULL, completed_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS business_settings (
+    business_id TEXT PRIMARY KEY, eap_name TEXT, eap_phone TEXT, eap_url TEXT, eap_notes TEXT, updated_at TEXT
+  );
   CREATE INDEX IF NOT EXISTS idx_users_business ON users(business_id);
   CREATE INDEX IF NOT EXISTS idx_emp_business   ON employees(business_id);
   CREATE INDEX IF NOT EXISTS idx_cases_business ON cases(business_id);
@@ -156,6 +162,7 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_leave_biz      ON leave_requests(business_id);
   CREATE INDEX IF NOT EXISTS idx_suggest_biz    ON suggestions(business_id);
   CREATE INDEX IF NOT EXISTS idx_notif_user     ON notifications(user_id);
+  CREATE INDEX IF NOT EXISTS idx_academy_user   ON academy_progress(user_id);
 `;
 
 async function init() {

@@ -540,3 +540,31 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
 /* inline "source" chips that link guidance to its legal backing */
 .ref-chip { display: inline-flex; align-items: center; gap: .15rem; background: var(--brand-50); border: 1px solid transparent; color: var(--brand-700); font-size: .72rem; font-weight: 700; cursor: pointer; padding: .1rem .45rem; border-radius: 999px; vertical-align: middle; line-height: 1.5; }
 .ref-chip:hover { border-color: var(--brand); }
+
+/* ---------- Dashboard command centre ---------- */
+.dash-sub { font-size: 1.05rem; color: var(--ink-soft); margin: -.3rem 0 1.1rem; }
+.dash-sub strong { color: var(--brand-700); }
+.stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .7rem; margin-bottom: 1.8rem; }
+@media (min-width: 720px) { .stat-grid { grid-template-columns: repeat(6, 1fr); } }
+.stat-tile { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .15rem; padding: 1rem .5rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); text-decoration: none; color: var(--ink); box-shadow: var(--shadow-sm); transition: transform .1s ease, box-shadow .15s ease; }
+.stat-tile:hover { transform: translateY(-2px); box-shadow: var(--shadow); text-decoration: none; }
+.stat-tile .st-n { font-family: var(--font-head); font-weight: 900; font-size: 1.8rem; line-height: 1; color: var(--brand-700); }
+.stat-tile .st-l { font-size: .76rem; font-weight: 600; color: var(--ink-faint); text-align: center; }
+.stat-tile.dev .st-n { color: var(--accent, #2c6e9c); }
+.stat-tile.pos .st-n { color: var(--positive-700); }
+.stat-tile.alert { border-color: var(--watch); background: var(--watch-50); }
+.stat-tile.alert .st-n { color: var(--watch); }
+
+/* ---------- Manager academy + wellbeing ---------- */
+.doc-narrow { max-width: 680px; }
+.lesson-body p { margin: .8rem 0; line-height: 1.65; }
+.lesson-extra { border: 1px solid var(--line); border-left: 3px solid var(--brand); border-radius: var(--r); padding: .8rem 1rem; margin: .8rem 0; }
+.lesson-extra strong { display: block; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--brand-700); margin-bottom: .2rem; }
+.lesson-extra p { margin: 0; color: var(--ink-soft); }
+.lesson-extra.reflect { border-left-color: var(--accent); background: var(--surface-2); }
+.lesson-extra.reflect strong { color: var(--ink); }
+ul.tidy { margin: .2rem 0; padding-left: 1.2rem; }
+ul.tidy li { margin: .35rem 0; line-height: 1.5; }
+.crisis-card { display: flex; align-items: center; gap: 1rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: .85rem 1.1rem; margin-bottom: .6rem; text-decoration: none; color: var(--ink); box-shadow: var(--shadow-sm); }
+a.crisis-card:hover { border-color: var(--brand); text-decoration: none; transform: translateY(-1px); }
+.crisis-phone { font-family: var(--font-head); font-weight: 900; font-size: 1.15rem; color: var(--brand-700); white-space: nowrap; flex: none; }

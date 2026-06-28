@@ -141,8 +141,10 @@
       item('leave', '#/leave', '🌴', 'Leave') +
       item('suggestions', '#/suggestions', '💡', 'Suggestions') +
       '<div class="nav-group-label">Learn</div>' +
+      item('academy', '#/academy', '🎓', 'Manager academy') +
       item('guide', '#/guide', '⚖️', 'Fair Work guide') +
       item('legal', '#/legal', '📚', 'Legal backing') +
+      item('support', '#/support', '🫶', 'Wellbeing & EAP') +
       '<div class="sidebar-foot"><div class="biz">' + esc(b.name) + '</div>' +
       '<div>' + esc(State.me.name) + ' · <a href="#" id="logout">Log out</a></div></div>' +
       '</aside>' +
@@ -212,33 +214,46 @@
 
   // ---------------- dashboard ----------------
   async function viewDashboard() {
-    const [d, coach, upcoming] = await Promise.all([api('GET', '/dashboard'), api('GET', '/coach'), api('GET', '/lifecycle')]);
+    const [d, coach, upcoming, leave, suggestions, onboarding] = await Promise.all([
+      api('GET', '/dashboard'), api('GET', '/coach'), api('GET', '/lifecycle'),
+      api('GET', '/leave').catch(() => []), api('GET', '/suggestions').catch(() => []), api('GET', '/onboarding').catch(() => [])
+    ]);
     const s = d.stats;
+    const firstName = State.me.name.split(' ')[0];
+    const pendingLeave = (leave || []).filter((l) => l.status === 'pending');
+    const newSuggestions = (suggestions || []).filter((x) => x.status === 'new');
+    const dueMoments = (upcoming || []).filter((m) => m.daysUntil <= 3);
+
+    // ---- one merged "needs you today" list ----
+    const actions = [];
+    dueMoments.forEach((m) => actions.push({ icon: m.daysUntil < 0 ? '⏰' : '📅', urgency: m.daysUntil < 0 ? 3 : 1, title: m.title.replace(/\{name\}/g, (m.employee_name || '').split(' ')[0]), sub: (m.employee_name || '') + ' · ' + relativeDue(m.daysUntil), link: '#/member/' + m.employee_id, badge: relativeDue(m.daysUntil), bcls: m.daysUntil < 0 ? 'badge-watchful' : '' }));
+    pendingLeave.forEach((l) => actions.push({ icon: '🌴', urgency: 2, title: (l.employee_name || 'Someone') + ' — leave request', sub: (l.leave_type || 'Leave') + ' · ' + l.start_date, link: '#/leave', badge: 'Approve', bcls: 'badge-watchful' }));
+    newSuggestions.forEach((x) => actions.push({ icon: '💡', urgency: 1, title: 'New suggestion' + (x.anonymous ? '' : ' — ' + (x.employee_name || '')), sub: (x.category ? x.category + ' · ' : '') + (x.body || '').slice(0, 50), link: '#/suggestions', badge: 'New', bcls: '' }));
+    (d.attention || []).forEach((c) => actions.push({ icon: c.flow_icon || '🔔', urgency: 3, title: c.title, sub: (c.flow_name || '') + ' · ' + (c.employee_name || ''), link: '#/case/' + c.id, badge: c.reason, bcls: 'badge-watchful' }));
+    actions.sort((a, b) => b.urgency - a.urgency);
+    const needCount = actions.length;
+    const actionList = needCount
+      ? '<div class="row-list">' + actions.slice(0, 8).map((a) => '<a href="' + a.link + '" class="row"><span class="ic-circle">' + a.icon + '</span><span class="grow"><span class="t">' + esc(a.title) + '</span><span class="s">' + esc(a.sub) + '</span></span><span class="meta"><span class="badge ' + a.bcls + '">' + esc(a.badge) + '</span></span></a>').join('') + '</div>'
+      : '<div class="card card-pad" style="text-align:center;padding:1.8rem"><div style="font-size:2.2rem">✅</div><strong>You\'re all caught up.</strong><div class="muted">Nothing needs you right now — nice work.</div></div>';
+
+    // ---- clickable stat tiles ----
+    const tile = (href, n, label, cls, alert) => '<a href="' + href + '" class="stat-tile ' + (cls || '') + (alert ? ' alert' : '') + '"><div class="st-n">' + n + '</div><div class="st-l">' + label + '</div></a>';
+    const tiles = '<div class="stat-grid">' +
+      tile('#/team', s.employees, 'Workers') +
+      tile('#/onboarding', (onboarding || []).length, 'Onboarding', 'dev') +
+      tile('#/cases', s.openCases, 'Open cases') +
+      tile('#/leave', pendingLeave.length, 'Leave to OK', '', pendingLeave.length > 0) +
+      tile('#/suggestions', newSuggestions.length, 'New ideas', '', newSuggestions.length > 0) +
+      tile('#/cases', s.positive, 'Good news', 'pos') +
+      '</div>';
+
     const coachPanel = (coach.nudges && coach.nudges.length)
-      ? '<div class="section-title"><h3>🧠 Your coach reckons…</h3></div>' +
+      ? '<div class="section-title" style="margin-top:1.8rem"><h3>🧠 Your coach reckons…</h3></div>' +
         (coach.tips && coach.tips.length ? '<div class="coach-tip" style="margin-bottom:.7rem">💡 ' + esc(coach.tips[Math.floor(Math.random() * coach.tips.length)]) + '</div>' : '') +
         coach.nudges.map((n) => '<div class="coach-card tone-' + n.tone + '"><div class="grow"><div class="ct">' + esc(n.title) + (n.employee_name ? ' · ' + esc(n.employee_name) : '') + '</div><div class="cp">' + esc(n.prompt) + '</div>' + (n.extra ? '<div class="muted" style="font-size:.82rem;margin-top:.2rem">“' + esc(n.extra) + '”</div>' : '') + '</div>' + (n.employee_id ? '<a href="#/member/' + n.employee_id + '" class="btn btn-ghost btn-sm">' + esc(n.action || 'Open') + '</a>' : '') + '</div>').join('')
       : '';
-    const kpis =
-      '<div class="kpi-row">' +
-      '<div class="kpi"><div class="n">' + s.employees + '</div><div class="l">Workers</div></div>' +
-      '<div class="kpi"><div class="n">' + s.openCases + '</div><div class="l">Open cases</div></div>' +
-      '<div class="kpi dev"><div class="n">' + (s.inDevelopment || 0) + '</div><div class="l">On a career path</div></div>' +
-      '<div class="kpi pos"><div class="n">' + s.positive + '</div><div class="l">Good-news cases</div></div>' +
-      '<div class="kpi watch"><div class="n">' + s.watch + '</div><div class="l">Needs attention</div></div>' +
-      '<div class="kpi"><div class="n">' + (s.feedbackResponses || 0) + '</div><div class="l">Feedback replies</div></div>' +
-      '</div>';
     const banner = d.industrySet ? '' :
       '<div class="banner"><span style="font-size:1.6rem">🚀</span><div class="grow"><strong>Unlock career paths</strong><div class="muted" style="font-size:.9rem">Pick your industry and Offsider loads role ladders and the steps your crew can take to build a career.</div></div><a href="#/career" class="btn btn-primary btn-sm">Pick your industry</a></div>';
-
-    const attention = d.attention.length
-      ? '<div class="row-list">' + d.attention.map((c) =>
-        '<a href="#/case/' + c.id + '" class="row attention-card ' + sent(c.sentiment).cls + '">' +
-        '<span class="ic-circle">' + (c.flow_icon || '🔔') + '</span>' +
-        '<span class="grow"><span class="t">' + esc(c.title) + '</span><span class="s">' + esc(c.flow_name) + ' · ' + esc(c.employee_name || '') + '</span></span>' +
-        '<span class="meta"><span class="badge badge-watchful">' + esc(c.reason) + '</span></span></a>').join('') + '</div>'
-      : '<div class="card card-pad muted">Nothing needs chasing right now. Nice and tidy. 👌</div>';
-
     const recent = d.recent.length
       ? '<div class="row-list">' + d.recent.map((c) =>
         '<a href="#/case/' + c.id + '" class="row ' + sent(c.sentiment).cls + '">' +
@@ -247,13 +262,13 @@
         '<span class="meta"><span class="badge">' + (STATUS[c.status] || c.status) + '</span><br><span class="muted">' + fmtDate(c.updated_at) + '</span></span></a>').join('') + '</div>'
       : '<div class="empty"><span class="ic">🗂️</span>No cases yet. <a href="#/new">Start something</a> when a situation comes up.</div>';
 
-    const comingPanel = (upcoming && upcoming.length)
-      ? '<div class="section-title"><h3>📅 Coming up</h3></div><div class="row-list">' + upcoming.map((m) => '<a href="#/member/' + m.employee_id + '" class="row"><span class="ic-circle">' + (m.daysUntil < 0 ? '⏰' : '📅') + '</span><span class="grow"><span class="t">' + esc(m.title.replace(/\{name\}/g, (m.employee_name || '').split(' ')[0])) + '</span><span class="s">' + esc(m.employee_name) + '</span></span><span class="meta"><span class="badge ' + (m.daysUntil < 0 ? 'badge-watchful' : '') + '">' + relativeDue(m.daysUntil) + '</span></span></a>').join('') + '</div>'
-      : '';
-    const content = banner + kpis + coachPanel + comingPanel +
-      '<div class="section-title"><h3>Needs your attention</h3></div>' + attention +
-      '<div class="section-title"><h3>Recent activity</h3><a href="#/cases" class="btn btn-ghost btn-sm">See all</a></div>' + recent;
-    layout('home', 'G\'day, ' + State.me.name.split(' ')[0], content);
+    const content = banner +
+      '<p class="dash-sub">' + (needCount ? '<strong>' + needCount + '</strong> thing' + (needCount === 1 ? '' : 's') + ' could use you today.' : 'You\'re all caught up. 👌') + '</p>' +
+      tiles +
+      '<div class="section-title"><h3>🎯 Needs you' + (needCount ? ' (' + needCount + ')' : '') + '</h3></div>' + actionList +
+      coachPanel +
+      '<div class="section-title" style="margin-top:1.8rem"><h3>Recent activity</h3><a href="#/cases" class="btn btn-ghost btn-sm">See all</a></div>' + recent;
+    layout('home', 'G\'day, ' + firstName, content);
   }
 
   // ---------------- cases list ----------------
@@ -1039,6 +1054,7 @@
       (canOnboard ? ' <button class="btn btn-ghost btn-sm" id="startOnb">👋 Onboarding</button>' : '') +
       ' <button class="btn btn-ghost btn-sm" id="reflectBtn">🧠 Reflect</button>' +
       ' <a href="#/training/' + e.id + '" class="btn btn-ghost btn-sm">📜 Training record</a>' +
+      ' <button class="btn btn-ghost btn-sm" id="wellbeingBtn">🫶 Wellbeing</button>' +
       ' <button class="btn btn-ghost btn-sm" id="quickNoteHere">✎ Quick note</button>' +
       ' <a href="#/new" class="btn btn-primary btn-sm">Start something</a></div>';
 
@@ -1178,6 +1194,7 @@
     const so = $('#startOnb'); if (so) so.onclick = async () => { const c = await api('POST', '/cases', { employee_id: e.id, flow_id: 'onboarding' }); location.hash = '#/case/' + c.id; };
     const qh = $('#quickNoteHere'); if (qh) qh.onclick = () => openQuickNote(e.id);
     const rb = $('#reflectBtn'); if (rb) rb.onclick = () => openReflection(e);
+    const wbb = $('#wellbeingBtn'); if (wbb) wbb.onclick = () => openReferEap(e);
     const al = $('#assignLesson'); if (al) al.onclick = () => openLessonAssign(e.id);
     const ap = $('#assignPlan'); if (ap) ap.onclick = () => openPlanModal(e.id);
     root().querySelectorAll('.moment-done').forEach((b) => { b.onclick = async () => { await api('POST', '/lifecycle/done', { employee_id: e.id, rule_id: b.dataset.r, occurrence_key: b.dataset.k }); viewMember(e.id); }; });
@@ -1339,6 +1356,95 @@
         ? '<div class="section-title"><h3>By area</h3><span class="muted" style="font-size:.85rem">' + lr.domains.length + ' areas · updated ' + esc(lr.updated || '') + '</span></div>' + lr.domains.map(domainCard).join('')
         : '<div class="empty"><span class="ic">📚</span>Legal references are being compiled — check back shortly.</div>') +
       '<div class="section-title" style="margin-top:1.8rem"><h3>Official sources &amp; help</h3></div><div class="row-list">' + contacts + '</div>');
+  }
+
+  // ---------------- MANAGER ACADEMY ----------------
+  async function viewAcademy() {
+    const a = await api('GET', '/academy');
+    const done = new Set(a.done || []);
+    const all = (a.modules || []).flatMap((m) => m.lessons || []);
+    const doneCount = all.filter((l) => done.has(l.id)).length;
+    const pct = all.length ? Math.round(doneCount / all.length * 100) : 0;
+    const moduleCard = (m, i) => {
+      const ls = m.lessons || [];
+      const md = ls.filter((l) => done.has(l.id)).length;
+      const rows = ls.map((l) => '<a href="#/academy/' + l.id + '" class="row"><span class="ic-circle">' + (done.has(l.id) ? '✅' : '📖') + '</span><span class="grow"><span class="t">' + esc(l.title) + '</span><span class="s">' + (l.mins ? l.mins + ' min read' : '') + '</span></span><span class="meta">' + (done.has(l.id) ? '<span class="badge badge-positive">done</span>' : 'Read →') + '</span></a>').join('');
+      return '<details class="legal-domain"' + (md < ls.length && i === 0 ? ' open' : '') + '><summary><span class="ld-title">' + (m.icon ? esc(m.icon) + ' ' : '') + esc(m.title) + '</span><span class="muted" style="font-size:.85rem">' + md + '/' + ls.length + '</span></summary><div class="ld-body"><p class="muted">' + esc(m.why) + '</p><div class="row-list">' + rows + '</div></div></details>';
+    };
+    layout('academy', 'Manager academy',
+      '<div class="panel" style="margin-bottom:1.4rem"><strong>🎓 Become a better boss</strong><p class="muted" style="margin:.3rem 0 .7rem">' + esc(a.intro || '') + '</p><div class="progress"><div class="progress-bar" style="width:' + Math.max(pct, 3) + '%"></div></div><div class="muted" style="font-size:.85rem;margin-top:.3rem">' + doneCount + ' of ' + all.length + ' lessons done' + (pct === 100 ? ' — legend! 🎉' : '') + '</div></div>' +
+      (a.modules || []).map(moduleCard).join(''));
+  }
+  async function viewAcademyLesson(lessonId) {
+    const a = await api('GET', '/academy');
+    const all = []; (a.modules || []).forEach((m) => (m.lessons || []).forEach((l) => all.push({ l, m })));
+    const i = all.findIndex((x) => x.l.id === lessonId);
+    if (i < 0) { location.hash = '#/academy'; return; }
+    const lesson = all[i].l, mod = all[i].m, next = all[i + 1];
+    const done = (a.done || []).includes(lessonId);
+    const bodyHtml = (lesson.body || '').split(/\n\n+/).map((p) => '<p>' + esc(p) + '</p>').join('');
+    layout('academy', lesson.title,
+      '<div class="doc-narrow">' +
+      '<div class="wizard-kind">' + (mod.icon ? esc(mod.icon) + ' ' : '') + esc(mod.title) + '</div>' +
+      '<h1 style="margin:.2rem 0 .1rem">' + esc(lesson.title) + '</h1>' + (lesson.mins ? '<div class="muted">' + lesson.mins + ' min read</div>' : '') +
+      '<div class="lesson-body">' + bodyHtml + '</div>' +
+      (lesson.takeaway ? '<div class="panel" style="background:var(--brand-50);border-color:var(--brand);margin:1.2rem 0"><strong>💡 Takeaway</strong><div style="margin-top:.2rem">' + esc(lesson.takeaway) + '</div></div>' : '') +
+      (lesson.science ? '<div class="lesson-extra"><strong>🔬 The science</strong><p>' + esc(lesson.science) + '</p></div>' : '') +
+      (lesson.inOffsider ? '<div class="lesson-extra"><strong>↪ In Offsider</strong><p>' + esc(lesson.inOffsider) + '</p></div>' : '') +
+      (lesson.reflection ? '<div class="lesson-extra reflect"><strong>🤔 Have a think</strong><p>' + esc(lesson.reflection) + '</p></div>' : '') +
+      '<div style="display:flex;gap:.6rem;margin-top:1.4rem;flex-wrap:wrap">' + (done ? '<button class="btn btn-ghost" id="acUndone">✓ Completed — undo</button>' : '<button class="btn btn-primary" id="acDone">Mark complete</button>') + (next ? '<a href="#/academy/' + next.l.id + '" class="btn btn-ghost">Next lesson →</a>' : '<a href="#/academy" class="btn btn-ghost">Back to academy</a>') + '</div>' +
+      '</div>', '<a href="#/academy">Manager academy</a>');
+    const dn = $('#acDone'); if (dn) dn.onclick = async () => { await api('POST', '/academy/' + lessonId); toast('Nice — lesson done ✅'); viewAcademyLesson(lessonId); };
+    const un = $('#acUndone'); if (un) un.onclick = async () => { await api('DELETE', '/academy/' + lessonId); viewAcademyLesson(lessonId); };
+  }
+
+  // ---------------- WELLBEING & EAP ----------------
+  function crisisCardHtml(c, asLink) {
+    const tel = 'tel:' + (c.phone || '').replace(/[^0-9]/g, '');
+    const inner = '<div class="grow"><strong>' + esc(c.name) + '</strong>' + (c.when ? '<div class="muted" style="font-size:.82rem">' + esc(c.when) + '</div>' : '') + (c.detail ? '<div class="muted" style="font-size:.85rem">' + esc(c.detail) + '</div>' : '') + '</div><span class="crisis-phone">' + esc(c.phone) + '</span>';
+    return asLink ? '<a href="' + tel + '" class="crisis-card">' + inner + '</a>' : '<div class="crisis-card">' + inner + '</div>';
+  }
+  async function viewSupport() {
+    const wb = await api('GET', '/wellbeing');
+    const k = wb.kit || {};
+    const list = (arr) => '<ul class="tidy">' + (arr || []).map((x) => '<li>' + esc(x) + '</li>').join('') + '</ul>';
+    const crisis = (k.crisisResources || []).map((c) => crisisCardHtml(c, true)).join('');
+    const eapPanel = wb.eap
+      ? '<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:1rem"><strong>Your EAP — ' + esc(wb.eap.name || 'Employee Assistance Program') + '</strong><button class="btn btn-ghost btn-sm" id="editEap">Edit</button></div>' + (wb.eap.phone ? '<div style="margin-top:.4rem">📞 <a href="tel:' + esc((wb.eap.phone || '').replace(/[^0-9]/g, '')) + '">' + esc(wb.eap.phone) + '</a></div>' : '') + (wb.eap.url ? '<div>🔗 <a href="' + esc(wb.eap.url) + '" target="_blank" rel="noopener">' + esc(wb.eap.url) + '</a></div>' : '') + (wb.eap.notes ? '<div class="muted" style="margin-top:.3rem">' + esc(wb.eap.notes) + '</div>' : '') + '<div class="muted" style="font-size:.82rem;margin-top:.5rem">Your whole team can see this in their app, so they can reach out confidentially.</div></div>'
+      : '<div class="panel" style="border-style:dashed"><strong>Set up your EAP</strong><div class="muted" style="font-size:.9rem;margin:.2rem 0 .7rem">If your business has an Employee Assistance Program (free, confidential counselling), add it so your team can find it any time.</div><button class="btn btn-primary btn-sm" id="setupEap">+ Add your EAP</button></div>';
+    layout('support', 'Wellbeing & EAP',
+      '<div class="panel" style="background:var(--brand);color:#eaf1f6;margin-bottom:1.4rem"><strong style="color:#fff">Looking after your people</strong><p style="margin:.3rem 0 0;color:#cfe0ea">' + esc(k.whatIsEap || '') + '</p></div>' +
+      eapPanel +
+      '<div class="section-title" style="margin-top:1.8rem"><h3>🆘 Crisis & support lines</h3></div><p class="muted" style="margin-top:-.2rem">Free, confidential, any time. Tap to call. Share with anyone who needs them.</p>' + crisis +
+      '<div class="section-title" style="margin-top:1.8rem"><h3>When to reach out</h3></div><div class="card card-pad">' + list(k.whenToRefer) + '</div>' +
+      '<div class="section-title" style="margin-top:1.4rem"><h3>How to raise it kindly</h3></div><div class="card card-pad">' + (k.conversation && k.conversation.opener ? '<p style="margin-top:0"><em>“' + esc(k.conversation.opener) + '”</em></p>' : '') + list((k.conversation && k.conversation.tips) || k.howToRefer) + '</div>' +
+      '<div class="grid grid-2" style="margin-top:1.4rem"><div class="card card-pad"><strong>✅ Do</strong>' + list(k.managerDos) + '</div><div class="card card-pad"><strong>🚫 Don\'t</strong>' + list(k.managerDonts) + '</div></div>' +
+      (k.legalNote ? '<div class="disclaimer-note" style="margin-top:1.4rem">' + esc(k.legalNote) + ' ' + refChip('whs', 'psychosocial duty care wellbeing health safety', 'Duty of care') + '</div>' : ''));
+    const se = $('#setupEap'); if (se) se.onclick = () => openEapEdit(wb.eap);
+    const ee = $('#editEap'); if (ee) ee.onclick = () => openEapEdit(wb.eap);
+  }
+  function openEapEdit(eap) {
+    eap = eap || {};
+    openModal('<h2>Your Employee Assistance Program</h2><p class="muted">Add your EAP provider so your team can reach confidential support. Leave blank if you don\'t have one yet.</p>' +
+      '<div class="field"><label>Provider name</label><input id="eapName" value="' + esc(eap.name || '') + '" placeholder="e.g. AccessEAP, Acacia, Converge"></div>' +
+      '<div class="field"><label>Phone</label><input id="eapPhone" value="' + esc(eap.phone || '') + '" placeholder="1800 ..."></div>' +
+      '<div class="field"><label>Website / booking link</label><input id="eapUrl" value="' + esc(eap.url || '') + '" placeholder="https://..."></div>' +
+      '<div class="field"><label>Notes for your team</label><textarea id="eapNotes" rows="2" placeholder="e.g. Free &amp; confidential, a few sessions a year. Just mention you work at [business].">' + esc(eap.notes || '') + '</textarea></div>' +
+      '<div class="modal-foot"><button class="btn btn-ghost" id="eapCancel">Cancel</button><button class="btn btn-primary" id="eapSave">Save</button></div>');
+    $('#eapCancel').onclick = closeModal;
+    $('#eapSave').onclick = async () => { await api('POST', '/settings/eap', { eap_name: $('#eapName').value.trim(), eap_phone: $('#eapPhone').value.trim(), eap_url: $('#eapUrl').value.trim(), eap_notes: $('#eapNotes').value.trim() }); closeModal(); toast('Saved'); viewSupport(); };
+  }
+  async function openReferEap(emp) {
+    const wb = await api('GET', '/wellbeing'); const k = wb.kit || {};
+    const crisis = (k.crisisResources || []).slice(0, 4).map((c) => '<div style="display:flex;justify-content:space-between;padding:.35rem 0;border-bottom:1px dashed var(--line)"><span>' + esc(c.name) + '</span><strong>' + esc(c.phone) + '</strong></div>').join('');
+    openModal('<h2>🫶 Wellbeing support for ' + esc(emp.name.split(' ')[0]) + '</h2>' +
+      '<p class="muted">' + esc((k.conversation && k.conversation.opener) || 'Have a quiet, caring word and point them to confidential support.') + '</p>' +
+      (wb.eap ? '<div class="panel"><strong>Your EAP: ' + esc(wb.eap.name || 'EAP') + '</strong>' + (wb.eap.phone ? ' · ' + esc(wb.eap.phone) : '') + '</div>' : '<div class="panel" style="border-style:dashed">No EAP set up yet. <a href="#/support">Add one →</a></div>') +
+      '<div style="margin:.8rem 0"><div class="muted" style="font-weight:700;font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.2rem">Crisis lines</div>' + crisis + '</div>' +
+      '<label class="check-item" style="margin:.5rem 0"><input type="checkbox" id="logSupport" checked><span><span class="ci-label">Log a private wellbeing note</span><br><span class="ci-help">Records that you offered support — never what was discussed.</span></span></label>' +
+      '<div class="modal-foot"><button class="btn btn-ghost" id="reapCancel">Close</button><button class="btn btn-primary" id="reapDone">Done</button></div>');
+    $('#reapCancel').onclick = closeModal;
+    $('#reapDone').onclick = async () => { if ($('#logSupport').checked) { await api('POST', '/employees/' + emp.id + '/refer-eap', {}); toast('Logged — good on you'); } closeModal(); };
   }
 
   // ---------------- MANAGER: productivity / leave / suggestions ----------------
@@ -1577,8 +1683,17 @@
     const sg = kit.suggestions || { categories: [], intro: '', prompts: [] };
     staffLayout('<h1 style="font-size:1.6rem;margin-bottom:.1rem">Say something</h1><p class="muted">' + esc(sg.intro || '') + '</p>' +
       '<button class="btn btn-primary btn-block" id="newSuggest" style="margin:.4rem 0 1.4rem">💬 Send a suggestion</button>' +
-      '<div class="panel"><strong>Got a scheduled check-in?</strong><p class="muted" style="font-size:.9rem;margin:.2rem 0">Some check-ins are fully anonymous — a safe way to give honest feedback.</p><a href="#/" class="btn btn-ghost btn-sm">See your check-ins →</a></div>', 'say');
+      '<div class="panel"><strong>Got a scheduled check-in?</strong><p class="muted" style="font-size:.9rem;margin:.2rem 0">Some check-ins are fully anonymous — a safe way to give honest feedback.</p><a href="#/" class="btn btn-ghost btn-sm">See your check-ins →</a></div>' +
+      '<a href="#/support" class="panel" style="display:flex;align-items:center;gap:.7rem;text-decoration:none;margin-top:.8rem"><span style="font-size:1.5rem">🫶</span><span class="grow"><strong>Need to talk to someone?</strong><div class="muted" style="font-size:.88rem">Free, confidential support — your EAP and 24/7 crisis lines.</div></span><span class="meta">→</span></a>', 'say');
     $('#newSuggest').onclick = () => openSuggest(sg);
+  }
+  async function viewStaffSupport() {
+    const wb = await api('GET', '/wellbeing'); const k = wb.kit || {};
+    const crisis = (k.crisisResources || []).map((c) => crisisCardHtml(c, true)).join('');
+    staffLayout('<a href="#/say" class="btn btn-ghost btn-sm">← Back</a>' +
+      '<h1 style="font-size:1.6rem;margin:.6rem 0 .1rem">Support</h1><p class="muted">Free, confidential help — any time, for anything. You won\'t get in any trouble for reaching out.</p>' +
+      (wb.eap ? '<div class="panel"><strong>' + esc(wb.eap.name || 'Your workplace EAP') + '</strong><div class="muted" style="font-size:.9rem">Free, confidential counselling your work provides — they don\'t see what you talk about.</div>' + (wb.eap.phone ? '<div style="margin-top:.5rem"><a href="tel:' + esc((wb.eap.phone || '').replace(/[^0-9]/g, '')) + '" class="btn btn-primary btn-sm">📞 ' + esc(wb.eap.phone) + '</a></div>' : '') + (wb.eap.notes ? '<div class="muted" style="font-size:.85rem;margin-top:.4rem">' + esc(wb.eap.notes) + '</div>' : '') + '</div>' : '') +
+      '<div class="section-title" style="margin-top:1.4rem"><h3>🆘 Anytime support lines</h3></div>' + crisis, 'say');
   }
   function openSuggest(sg) {
     const cats = (sg.categories || []).map((c) => '<option value="' + esc(c.label) + '">' + (c.icon || '') + ' ' + esc(c.label) + '</option>').join('');
@@ -1624,6 +1739,7 @@
         if (hash.indexOf('#/log') === 0) return await viewStaffLog();
         if (hash.indexOf('#/leave') === 0) return await viewStaffLeave();
         if (hash.indexOf('#/say') === 0) return await viewStaffSay();
+        if (hash.indexOf('#/support') === 0) return await viewStaffSupport();
         if (hash.indexOf('#/training') === 0) return await viewStaffTraining();
         return await viewStaffHome();
       }
@@ -1644,6 +1760,9 @@
       if (hash.indexOf('#/productivity') === 0) return await viewProductivity();
       if (hash.indexOf('#/leave') === 0) return await viewLeave();
       if (hash.indexOf('#/suggestions') === 0) return await viewSuggestions();
+      if (hash.indexOf('#/academy/') === 0) return await viewAcademyLesson(hash.split('/')[2]);
+      if (hash.indexOf('#/academy') === 0) return await viewAcademy();
+      if (hash.indexOf('#/support') === 0) return await viewSupport();
       if (hash.indexOf('#/guide') === 0) return await viewGuide();
       if (hash.indexOf('#/legal') === 0) return await viewLegal();
       return await viewDashboard();
