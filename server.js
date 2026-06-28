@@ -560,6 +560,31 @@ app.post('/api/public/candidate/:token/accept', h(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// ---------- public REFERENCES page (the CANDIDATE lists their referees here, no login) ----------
+app.get('/api/public/candidate/:token/refs', h(async (req, res) => {
+  const c = await db.prepare('SELECT * FROM candidates WHERE token = ?').get(req.params.token);
+  if (!c) return res.status(404).json({ error: 'This link is not valid.' });
+  const biz = (await db.prepare('SELECT name FROM businesses WHERE id = ?').get(c.business_id)) || {};
+  const existing = await db.prepare('SELECT id FROM candidate_references WHERE candidate_id = ?').all(c.id);
+  res.json({ businessName: biz.name || '', candidateName: c.name, firstName: (c.name || '').split(' ')[0], roleApplied: c.role_applied || '', suggested: 2, submittedCount: (existing || []).length });
+}));
+app.post('/api/public/candidate/:token/refs', h(async (req, res) => {
+  const c = await db.prepare('SELECT * FROM candidates WHERE token = ?').get(req.params.token);
+  if (!c) return res.status(404).json({ error: 'This link is not valid.' });
+  const list = Array.isArray(req.body && req.body.referees) ? req.body.referees : [];
+  const clean = list.map((r) => ({
+    name: String((r && r.name) || '').trim(), relationship: String((r && r.relationship) || '').trim(),
+    company: String((r && r.company) || '').trim(), phone: String((r && r.phone) || '').trim(), email: String((r && r.email) || '').trim()
+  })).filter((r) => r.name && (r.phone || r.email)).slice(0, 5);
+  if (!clean.length) return res.status(400).json({ error: 'Add at least one referee with a name and a phone or email.' });
+  for (const r of clean) {
+    await db.prepare('INSERT INTO candidate_references (id, business_id, candidate_id, referee_name, relationship, company, phone, email, token, status, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      .run(uid(), c.business_id, c.id, r.name, r.relationship || null, r.company || null, r.phone || null, r.email || null, newToken(), 'pending', null, now(), now());
+  }
+  await notifyManagers(c.business_id, 'application', 'References in — ' + c.name, c.name + ' added ' + clean.length + ' referee' + (clean.length === 1 ? '' : 's'), '#/candidate/' + c.id, null);
+  res.json({ ok: true, count: clean.length });
+}));
+
 // ---------- public REFERENCE check (referee fills this, no login) ----------
 app.get('/api/public/reference/:token', h(async (req, res) => {
   const r = await db.prepare('SELECT * FROM candidate_references WHERE token = ?').get(req.params.token);
@@ -1389,6 +1414,23 @@ app.post('/api/references/:id/send', h(async (req, res) => {
   const er = await sendEmail({ to: r.email, subject: 'Reference request — ' + (c ? c.name : 'a candidate'), text: body });
   res.json(Object.assign({ to: r.email, link, channel }, er));
 }));
+// Ask the CANDIDATE (after the interview) to list their referees via a link — they load straight back in.
+app.post('/api/candidates/:id/request-references', h(async (req, res) => {
+  const c = await db.prepare('SELECT * FROM candidates WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!c) return res.status(404).json({ error: 'Not found' });
+  const channel = (req.body && req.body.channel) || 'email';
+  const link = 'https://' + req.get('host') + '/refs/' + c.token;
+  const fn = (c.name || '').split(' ')[0] || 'there';
+  if (channel === 'sms') {
+    if (!c.phone) return res.json({ sent: false, reason: 'no_phone' });
+    const sr = await sendSms({ to: c.phone, body: req.business.name + ': Hi ' + fn + ', thanks for coming in. Could you add a couple of referees here? Takes a minute: ' + link });
+    return res.json(Object.assign({ to: c.phone, link, channel }, sr));
+  }
+  if (!c.email) return res.json({ sent: false, reason: 'no_email' });
+  const body = 'Hi ' + fn + ',\n\nThanks for coming in to chat with us. To move things along, could you add a couple of references here — just their name, how you know them, and a phone or email? It only takes a minute:\n\n' + link + '\n\nThanks,\n' + req.user.name + '\n' + req.business.name;
+  const er = await sendEmail({ to: c.email, subject: 'Your references — ' + req.business.name, text: body });
+  res.json(Object.assign({ to: c.email, link, channel }, er));
+}));
 
 // quick-add an applicant by pasting a Seek/Indeed email (+ optional resume) — no integration needed
 app.post('/api/candidates/from-email', h(async (req, res) => {
@@ -1700,6 +1742,7 @@ app.get('/f/:token', (req, res) => res.sendFile(path.join(PUBLIC, 'feedback.html
 app.get('/c/:token', (req, res) => res.sendFile(path.join(PUBLIC, 'candidate.html')));
 app.get('/r/:token', (req, res) => res.sendFile(path.join(PUBLIC, 'reference.html')));
 app.get('/apply/:token', (req, res) => res.sendFile(path.join(PUBLIC, 'apply.html')));
+app.get('/refs/:token', (req, res) => res.sendFile(path.join(PUBLIC, 'refs.html')));
 app.get('/jobs/:bizId', (req, res) => res.sendFile(path.join(PUBLIC, 'careers.html')));
 app.use(express.static(PUBLIC));
 

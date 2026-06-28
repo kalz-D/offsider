@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your references · Offsider</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  body { background: var(--brand); }
+  .fb-wrap { max-width: 600px; margin: 0 auto; padding: 1.4rem 1rem 4rem; }
+  .fb-top { display: flex; align-items: center; gap: .5rem; color: #fff; padding: 1rem .2rem 1.4rem; }
+  .fb-card { background: var(--surface); border-radius: var(--r-xl); box-shadow: var(--shadow-lg); padding: 1.7rem 1.5rem; }
+  .fb-card h1 { font-size: 1.55rem; }
+  .ref-block { border: 1.5px solid var(--line); border-radius: var(--r-lg); padding: 1.1rem 1.1rem .4rem; margin-bottom: .9rem; position: relative; }
+  .ref-block .rb-head { font-family: var(--font-head); font-weight: 800; margin-bottom: .6rem; color: var(--brand-700); }
+  .ref-block .rm { position: absolute; top: .7rem; right: .8rem; background: none; border: none; color: var(--ink-faint); font-size: 1.1rem; cursor: pointer; }
+  .field { margin-bottom: .7rem; }
+  .field label { display: block; font-weight: 600; font-size: .9rem; margin-bottom: .25rem; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: .7rem; }
+  @media (max-width: 460px) { .row2 { grid-template-columns: 1fr; } }
+  input[type=text], input[type=email], input[type=tel] { width: 100%; }
+  .fb-done { text-align: center; padding: 1.5rem 1rem; }
+  .fb-done .big { font-size: 3rem; }
+  .fb-foot { text-align: center; color: #bcd2e0; font-size: .82rem; margin-top: 1.4rem; }
+</style>
+</head>
+<body>
+<div class="fb-wrap">
+  <div class="fb-top"><span class="logo-mark"><svg viewBox="0 0 24 24"><path d="M12 2 L16.5 12.5 L12 10.2 L7.5 12.5 Z" fill="#fff"/><path d="M12 22 L7.5 11.5 L12 13.8 L16.5 11.5 Z" fill="#fff" opacity=".4"/></svg></span><strong style="font-family:var(--font-head);font-size:1.15rem">Offsider</strong></div>
+  <div id="box"><div class="fb-card"><div class="loading-full" style="min-height:120px"><div class="spinner"></div></div></div></div>
+  <div class="fb-foot">Powered by Offsider</div>
+</div>
+<script>
+(function () {
+  var token = location.pathname.split('/').filter(Boolean).pop();
+  var box = document.getElementById('box');
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); };
+  var data = null, count = 0;
+  function card(i) { return '<div class="fb-card">' + i + '</div>'; }
+
+  fetch('/api/public/candidate/' + token + '/refs').then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+    .then(function (res) {
+      if (!res.ok) { box.innerHTML = card('<div class="fb-done"><div class="big">🤷</div><h1>' + esc(res.j.error || 'Link not found') + '</h1></div>'); return; }
+      data = res.j;
+      render();
+    });
+
+  function blockHtml(n) {
+    return '<div class="ref-block" data-block="' + n + '">' +
+      (n > 0 ? '<button class="rm" data-rm="' + n + '" title="Remove">✕</button>' : '') +
+      '<div class="rb-head">Referee ' + (n + 1) + '</div>' +
+      '<div class="field"><label>Their name</label><input type="text" data-f="name" placeholder="e.g. Sam Taylor"></div>' +
+      '<div class="row2"><div class="field"><label>How you know them</label><input type="text" data-f="relationship" placeholder="e.g. Former manager"></div>' +
+      '<div class="field"><label>Workplace (optional)</label><input type="text" data-f="company" placeholder="e.g. ACME Pty Ltd"></div></div>' +
+      '<div class="row2"><div class="field"><label>Their mobile</label><input type="tel" data-f="phone" placeholder="0400 000 000"></div>' +
+      '<div class="field"><label>Their email</label><input type="email" data-f="email" placeholder="name@email.com"></div></div>' +
+      '</div>';
+  }
+
+  function render() {
+    var fn = data.firstName || 'there';
+    var blocks = '';
+    var start = Math.max(2, data.suggested || 2);
+    for (var i = 0; i < start; i++) blocks += blockHtml(i);
+    count = start;
+    box.innerHTML = card(
+      '<h1>Your references</h1>' +
+      '<div class="muted" style="font-weight:600">' + esc(data.businessName) + (data.roleApplied ? ' · ' + esc(data.roleApplied) : '') + '</div>' +
+      '<p class="job-blurb" style="white-space:normal;color:var(--ink-soft);line-height:1.55;margin:.7rem 0 1rem">Hi ' + esc(fn) + ' — thanks for coming in. Pop in a couple of people who can vouch for your work (a manager or supervisor is ideal). Add their name, how you know them, and a phone or email. We\'ll reach out to them directly — you don\'t need to do anything else.</p>' +
+      (data.submittedCount ? '<div class="panel" style="margin-bottom:1rem">✅ You\'ve already sent references through. Adding more here is fine.</div>' : '') +
+      '<div id="blocks">' + blocks + '</div>' +
+      '<button class="btn btn-ghost btn-sm" id="addRef" style="margin-bottom:1rem">+ Add another referee</button>' +
+      '<div id="err"></div>' +
+      '<button class="btn btn-primary btn-block btn-lg" id="submit">Send my references →</button>');
+    document.getElementById('addRef').onclick = function () { if (count >= 5) return; var d = document.createElement('div'); d.innerHTML = blockHtml(count); document.getElementById('blocks').appendChild(d.firstChild); wireRemovers(); count++; };
+    document.getElementById('submit').onclick = submit;
+    wireRemovers();
+  }
+
+  function wireRemovers() {
+    box.querySelectorAll('[data-rm]').forEach(function (b) { b.onclick = function () { var blk = b.closest('.ref-block'); if (blk) blk.parentNode.removeChild(blk); }; });
+  }
+
+  function submit() {
+    var referees = [];
+    box.querySelectorAll('.ref-block').forEach(function (blk) {
+      var g = function (f) { var el = blk.querySelector('[data-f="' + f + '"]'); return el ? el.value.trim() : ''; };
+      var r = { name: g('name'), relationship: g('relationship'), company: g('company'), phone: g('phone'), email: g('email') };
+      if (r.name && (r.phone || r.email)) referees.push(r);
+    });
+    if (!referees.length) { document.getElementById('err').innerHTML = '<div class="error-msg">Add at least one referee — their name and a phone or email.</div>'; return; }
+    var btn = document.getElementById('submit');
+    btn.disabled = true; btn.textContent = 'Sending…';
+    fetch('/api/public/candidate/' + token + '/refs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ referees: referees }) })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok) { document.getElementById('err').innerHTML = '<div class="error-msg">' + esc(res.j.error || 'Could not send') + '</div>'; btn.disabled = false; btn.textContent = 'Send my references →'; return; }
+        box.innerHTML = card('<div class="fb-done"><div class="big">🙌</div><h1>Thanks — got your ' + res.j.count + ' referee' + (res.j.count === 1 ? '' : 's') + '!</h1><p class="muted">We\'ll be in touch with them directly. Nothing more for you to do.</p></div>');
+      });
+  }
+})();
+</script>
+</body>
+</html>
