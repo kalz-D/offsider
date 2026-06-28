@@ -145,6 +145,10 @@ const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS business_settings (
     business_id TEXT PRIMARY KEY, eap_name TEXT, eap_phone TEXT, eap_url TEXT, eap_notes TEXT, updated_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS role_pay (
+    business_id TEXT NOT NULL, role_id TEXT NOT NULL, internal_name TEXT, rate REAL, range_max REAL, updated_at TEXT,
+    PRIMARY KEY (business_id, role_id)
+  );
   CREATE INDEX IF NOT EXISTS idx_users_business ON users(business_id);
   CREATE INDEX IF NOT EXISTS idx_emp_business   ON employees(business_id);
   CREATE INDEX IF NOT EXISTS idx_cases_business ON cases(business_id);

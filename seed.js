@@ -33,6 +33,19 @@ module.exports = async function seed(ctx) {
       .run(id, bizId, p.name, role ? role.title : null, p.type, p.start, 'active', 'geotech_lab', p.role, 'manufacturing', roleLevel(p.role), p.pay, 'hour', now());
   }
 
+  // internal pay levels (sit ABOVE the award floor) — what Qualtest actually pays per rung
+  const payScale = [
+    ['lab_assistant_sample_prep', 'Lab Hand', 30.0],
+    ['lab_technician', 'Lab Technician', 33.5],
+    ['field_technician', 'Field / Lab Tech', 38.0],
+    ['senior_technician_nata_signatory', 'Senior Tech (Signatory)', 42.5],
+    ['lab_supervisor_team_leader', 'Lab Supervisor', 46.0],
+    ['lab_quality_manager', 'Quality Manager', 52.0]
+  ];
+  for (const [rid, nm, rate] of payScale) {
+    await db.prepare('INSERT INTO role_pay (business_id, role_id, internal_name, rate, range_max, updated_at) VALUES (?,?,?,?,?,?)').run(bizId, rid, nm, rate, null, now());
+  }
+
   // Tom is progressing C10 -> C9
   if (ids['Tom Whitfield']) {
     const dev = {

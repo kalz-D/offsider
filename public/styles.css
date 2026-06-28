@@ -596,3 +596,16 @@ a.crisis-card:hover { border-color: var(--brand); text-decoration: none; transfo
 .navchip:hover { border-color: var(--brand); text-decoration: none; }
 .navchip.alert { background: var(--watch-50); border-color: var(--watch); color: var(--watch); }
 .navchip.alert strong { color: var(--watch); }
+
+/* ---------- Career ladder: award floor vs internal pay ---------- */
+.rung-pay { position: relative; margin-top: .6rem; padding: .6rem .8rem; border-radius: var(--r); background: var(--surface-2); }
+.rung-pay.pay-above { background: var(--positive-50); }
+.rung-pay.pay-below { background: var(--watch-50); }
+.rung-pay .rp-line { display: flex; align-items: baseline; justify-content: space-between; gap: .6rem; padding-right: 3.2rem; }
+.rung-pay .rp-name { font-weight: 600; }
+.rung-pay .rp-line strong { font-family: var(--font-head); font-weight: 800; font-size: 1.1rem; }
+.rung-pay .rp-u { font-size: .75rem; color: var(--ink-faint); font-weight: 600; }
+.rung-pay .rp-floor { font-size: .8rem; color: var(--ink-soft); margin-top: .15rem; padding-right: 3.2rem; }
+.rung-pay.pay-above .rp-floor { color: var(--positive-700); }
+.rung-pay.pay-below .rp-floor { color: var(--watch); font-weight: 600; }
+.rung-edit { position: absolute; top: .55rem; right: .55rem; padding: .25rem .6rem; }

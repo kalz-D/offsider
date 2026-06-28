@@ -983,6 +983,53 @@ app.post('/api/employees/:id/refer-eap', h(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// ---------- internal pay scale (sits above the award floor) ----------
+app.get('/api/pay-scale', h(async (req, res) => {
+  const pack = req.business.industry_id ? industryById(req.business.industry_id) : null;
+  if (!pack || !pack.pathway) return res.json({ roles: [], award: null });
+  const aId = pack.awardId || 'manufacturing';
+  const award = awardById(aId);
+  const rows = await db.prepare('SELECT * FROM role_pay WHERE business_id = ?').all(req.business.id);
+  const byRole = {}; rows.forEach((r) => { byRole[r.role_id] = r; });
+  const roles = (pack.pathway.roles || []).slice().sort((a, b) => a.level - b.level).map((r) => {
+    const lvl = r.awardLevel ? awardLevel(aId, r.awardLevel) : null;
+    const ip = byRole[r.id];
+    return { role_id: r.id, title: r.title, level: r.level, award_code: r.awardLevel || null, award_name: lvl ? lvl.name : null, award_hourly: lvl ? lvl.hourly : null, internal: ip ? { name: ip.internal_name, rate: ip.rate, range_max: ip.range_max } : null };
+  });
+  res.json({ roles, award: award ? { code: award.code, name: award.shortName, effective: award.effective, note: award.note, payTool: award.payTool, casualLoading: award.casualLoading } : null });
+}));
+app.put('/api/pay-scale/:roleId', h(async (req, res) => {
+  const b = req.body || {};
+  const rate = (b.rate != null && b.rate !== '') ? Number(b.rate) : null;
+  const rmax = (b.range_max != null && b.range_max !== '') ? Number(b.range_max) : null;
+  const ex = await db.prepare('SELECT 1 AS x FROM role_pay WHERE business_id=? AND role_id=?').get(req.business.id, req.params.roleId);
+  if (ex) await db.prepare('UPDATE role_pay SET internal_name=?, rate=?, range_max=?, updated_at=? WHERE business_id=? AND role_id=?').run(b.internal_name || null, rate, rmax, now(), req.business.id, req.params.roleId);
+  else await db.prepare('INSERT INTO role_pay (business_id, role_id, internal_name, rate, range_max, updated_at) VALUES (?,?,?,?,?,?)').run(req.business.id, req.params.roleId, b.internal_name || null, rate, rmax, now());
+  res.json({ ok: true });
+}));
+app.delete('/api/pay-scale/:roleId', h(async (req, res) => {
+  await db.prepare('DELETE FROM role_pay WHERE business_id=? AND role_id=?').run(req.business.id, req.params.roleId);
+  res.json({ ok: true });
+}));
+app.post('/api/pay-scale/suggest', h(async (req, res) => {
+  // seed a starting internal scale: award floor + a margin, rounded — editable afterwards
+  const pack = req.business.industry_id ? industryById(req.business.industry_id) : null;
+  if (!pack || !pack.pathway) return res.json({ ok: true, created: 0 });
+  const aId = pack.awardId || 'manufacturing';
+  const margin = (req.body && req.body.margin) ? Number(req.body.margin) : 0.2;
+  let created = 0;
+  for (const r of (pack.pathway.roles || [])) {
+    const lvl = r.awardLevel ? awardLevel(aId, r.awardLevel) : null;
+    if (!lvl) continue;
+    const ex = await db.prepare('SELECT 1 AS x FROM role_pay WHERE business_id=? AND role_id=?').get(req.business.id, r.id);
+    if (ex) continue;
+    const rate = Math.round((lvl.hourly * (1 + margin)) * 2) / 2; // nearest $0.50
+    await db.prepare('INSERT INTO role_pay (business_id, role_id, internal_name, rate, range_max, updated_at) VALUES (?,?,?,?,?,?)').run(req.business.id, r.id, r.title, rate, null, now());
+    created++;
+  }
+  res.json({ ok: true, created });
+}));
+
 // ---------- references (recruitment) ----------
 app.get('/api/reference-kit', (req, res) => res.json(referenceKit));
 app.get('/api/candidates/:id/references', h(async (req, res) => {

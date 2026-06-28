@@ -1244,25 +1244,64 @@
       });
       return;
     }
-    const [pack, employees] = await Promise.all([api('GET', '/industries/' + bizIndustryId), api('GET', '/employees')]);
+    const [pack, employees, payScale] = await Promise.all([api('GET', '/industries/' + bizIndustryId), api('GET', '/employees'), api('GET', '/pay-scale')]);
     const roles = (pack.pathway.roles || []).slice().sort((a, b) => a.level - b.level);
-    let award = null; if (pack.awardId) { try { award = await getAward(pack.awardId); } catch (x) { award = null; } }
-    const levelInfo = (code) => (award && code) ? (award.levels.find((l) => l.id === code) || null) : null;
+    const payMap = {}; (payScale.roles || []).forEach((r) => { payMap[r.role_id] = r; });
+    const anyInternal = (payScale.roles || []).some((r) => r.internal && r.internal.rate != null);
+    const aw = payScale.award;
+
+    const payBlock = (r) => {
+      const p = payMap[r.id] || { award_hourly: null, internal: null, award_code: r.awardLevel };
+      const floor = p.award_hourly, ip = p.internal;
+      if (ip && ip.rate != null) {
+        const above = floor != null ? ip.rate - floor : null;
+        const below = above != null && above < -0.001;
+        return '<div class="rung-pay ' + (below ? 'pay-below' : 'pay-above') + '"><div class="rp-line"><span class="rp-name">' + esc(ip.name || 'Your rate') + '</span><strong>' + money(ip.rate) + (ip.range_max ? '–' + money(ip.range_max) : '') + '<span class="rp-u">/hr</span></strong></div>' +
+          (floor != null ? '<div class="rp-floor">' + (below ? '⚠ below the award minimum ' + money(floor) : '✓ ' + money(Math.abs(above)) + ' above the award floor (' + money(floor) + (p.award_code ? ' · ' + p.award_code : '') + ')') + '</div>' : '') +
+          '<button class="btn btn-ghost btn-sm rung-edit" data-r="' + r.id + '">edit</button></div>';
+      }
+      return '<div class="rung-pay pay-none"><div class="muted" style="font-size:.85rem">Award minimum ' + (floor != null ? money(floor) + '/hr' : '') + (p.award_code ? ' · ' + p.award_code : '') + '</div><button class="btn btn-primary btn-sm rung-edit" data-r="' + r.id + '">Set your rate</button></div>';
+    };
+
     const ladder = roles.slice().reverse().map((r) => {
       const here = employees.filter((e) => e.current_role === r.id);
-      const lvl = levelInfo(r.awardLevel);
-      return '<div class="rung"><span class="lvl">' + r.level + '</span><div class="grow"><div class="rtitle">' + esc(r.title) + (lvl ? ' <span class="badge">' + esc(lvl.id) + ' · ~' + money(lvl.hourly) + '/hr</span>' : '') + '</div><div class="rsummary">' + esc(r.summary) + '</div>' +
+      return '<div class="rung"><span class="lvl">' + r.level + '</span><div class="grow"><div class="rtitle">' + esc(r.title) + '</div><div class="rsummary">' + esc(r.summary) + '</div>' +
+        payBlock(r) +
         (here.length ? '<div style="margin-top:.5rem">' + here.map((e) => '<a href="#/member/' + e.id + '" class="ticket-chip" style="background:var(--brand-50);color:var(--brand-700);border-color:transparent">👷 ' + esc(e.name) + '</a>').join('') + '</div>' : '') +
         ((r.stepsToNext && r.stepsToNext.length) ? '<div style="margin-top:.6rem;font-size:.82rem;color:var(--ink-faint)">Next: ' + r.stepsToNext.slice(0, 3).map((s) => esc(s.label)).join(' · ') + '</div>' : '') +
         '</div></div>';
     }).join('');
     const tickets = (pack.tickets || []).map((t) => '<div class="card card-pad" style="margin-bottom:.5rem"><strong>' + esc(t.name) + '</strong>' + (t.note ? '<div class="muted" style="font-size:.88rem;margin-top:.2rem">' + esc(t.note) + '</div>' : '') + '</div>').join('');
+
+    const payIntro = '<div class="panel" style="margin-bottom:1.2rem"><strong>💰 The award floor vs what you pay</strong>' +
+      '<p class="muted" style="font-size:.9rem;margin:.3rem 0 ' + (anyInternal ? '0' : '.7rem') + '">The award is the <em>legal minimum</em> — the floor. Your internal levels are what you actually pay, set at or above it (most businesses pay well above). ' + (aw ? 'Floor shown is ' + esc(aw.code) + ', the minimums from ' + esc((aw.effective || '').replace(/-/g, '/')) + '. ' + refChip('pay', 'award classification minimum wage pay records', 'Award minimums & paying above') : '') + '</p>' +
+      (anyInternal ? '' : '<button class="btn btn-primary btn-sm" id="suggestScale">Start me a scale (award + 20%)</button>') + '</div>';
+
     layout('career', 'Career paths',
       '<div class="banner" style="background:var(--brand-50);border-color:transparent"><span style="font-size:1.6rem">' + pack.icon + '</span><div class="grow"><strong>' + esc(pack.name) + ' — ' + esc(pack.pathway.name) + '</strong><div class="muted" style="font-size:.9rem">' + esc(pack.blurb) + '</div></div><button class="btn btn-ghost btn-sm" id="changeInd">Change</button></div>' +
-      '<div class="grid grid-2" style="align-items:start"><div><div class="section-title"><h3>The ladder</h3></div><div class="ladder">' + ladder + '</div></div>' +
+      payIntro +
+      '<div class="grid grid-2" style="align-items:start"><div><div class="section-title"><h3>The ladder &amp; pay</h3></div><div class="ladder">' + ladder + '</div></div>' +
       '<div><div class="section-title"><h3>🎫 Tickets to chase</h3></div>' + (tickets || '<div class="muted">—</div>') + '</div></div>');
     const ci = $('#changeInd');
     if (ci) ci.onclick = async () => { await api('PATCH', '/business', { industry_id: null }); State.me.business.industry_id = null; viewCareer(); };
+    const ss = $('#suggestScale'); if (ss) ss.onclick = async () => { await api('POST', '/pay-scale/suggest', { margin: 0.2 }); toast('Starter scale added — tweak any rung'); viewCareer(); };
+    root().querySelectorAll('.rung-edit').forEach((b) => { b.onclick = () => openPayLevelEdit(payMap[b.getAttribute('data-r')]); });
+  }
+  function openPayLevelEdit(role) {
+    if (!role) return;
+    const ip = role.internal || {};
+    openModal('<h2>Pay for ' + esc(role.title) + '</h2>' +
+      '<p class="muted">Award floor: <strong>' + (role.award_hourly ? money(role.award_hourly) + '/hr' : '—') + '</strong>' + (role.award_code ? ' (' + role.award_code + ')' : '') + '. Set what you actually pay — at or above the floor.</p>' +
+      '<div class="field"><label>Your level name</label><input id="plName" value="' + esc(ip.name || role.title || '') + '" placeholder="e.g. Senior Tech, Level 3"></div>' +
+      '<div class="grid grid-2"><div class="field"><label>Rate $/hr</label><input type="number" id="plRate" step="0.50" inputmode="decimal" value="' + (ip.rate != null ? ip.rate : '') + '" placeholder="e.g. 38.00"></div>' +
+      '<div class="field"><label>Top of band (optional)</label><input type="number" id="plMax" step="0.50" inputmode="decimal" value="' + (ip.range_max != null ? ip.range_max : '') + '" placeholder="e.g. 44.00"></div></div>' +
+      '<div id="plWarn"></div>' +
+      '<div class="modal-foot">' + (role.internal ? '<button class="btn btn-ghost" id="plClear">Remove</button>' : '<button class="btn btn-ghost" id="plCancel">Cancel</button>') + '<button class="btn btn-primary" id="plSave">Save</button></div>');
+    const warn = () => { const v = parseFloat($('#plRate').value); const w = $('#plWarn'); if (!isNaN(v) && role.award_hourly) { w.innerHTML = v < role.award_hourly ? '<div class="error-msg">⚠ Below the award minimum of ' + money(role.award_hourly) + '/hr — you can\'t pay under the floor.</div>' : '<div class="ok-msg">✓ ' + money(v - role.award_hourly) + '/hr above the award floor.</div>'; } else { w.innerHTML = ''; } };
+    $('#plRate').oninput = warn; warn();
+    const c1 = $('#plCancel'); if (c1) c1.onclick = closeModal;
+    const cl = $('#plClear'); if (cl) cl.onclick = async () => { await api('DELETE', '/pay-scale/' + role.role_id); closeModal(); toast('Removed'); viewCareer(); };
+    $('#plSave').onclick = async () => { await api('PUT', '/pay-scale/' + role.role_id, { internal_name: $('#plName').value.trim(), rate: $('#plRate').value, range_max: $('#plMax').value }); closeModal(); toast('Saved'); viewCareer(); };
   }
 
   // ---------------- feedback ----------------
