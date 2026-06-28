@@ -18,6 +18,8 @@
     "connect-pg-simple": "^9.0.1",
     "express": "^4.19.2",
     "express-session": "^1.18.0",
+    "imapflow": "^1.4.3",
+    "mailparser": "^3.9.12",
     "mammoth": "^1.12.0",
     "nodemailer": "^6.10.1",
     "pg": "^8.13.1"

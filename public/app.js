@@ -858,7 +858,7 @@
   function statusBadge(s) { const m = CAND_STATUS[s] || { label: s, cls: '' }; return '<span class="badge ' + m.cls + '">' + esc(m.label) + '</span>'; }
 
   async function viewHiring() {
-    const [cands, contracts, emailStatus, smsStatus, jobOpenings] = await Promise.all([api('GET', '/candidates'), api('GET', '/files?kind=contract').catch(() => []), api('GET', '/email-status').catch(() => ({ configured: false })), api('GET', '/sms-status').catch(() => ({ configured: false })), api('GET', '/job-openings').catch(() => [])]);
+    const [cands, contracts, emailStatus, smsStatus, jobOpenings, inboxStatus] = await Promise.all([api('GET', '/candidates'), api('GET', '/files?kind=contract').catch(() => []), api('GET', '/email-status').catch(() => ({ configured: false })), api('GET', '/sms-status').catch(() => ({ configured: false })), api('GET', '/job-openings').catch(() => []), api('GET', '/inbox-status').catch(() => ({ configured: false }))]);
     const closedSet = { hired: 1, rejected: 1, declined: 1 };
     const active = cands.filter((c) => !closedSet[c.status]);
     const done = cands.filter((c) => closedSet[c.status]);
@@ -872,7 +872,13 @@
       '<div style="margin-top:1rem"><strong>Texting (SMS)</strong><div class="muted" style="font-size:.88rem;margin-top:.2rem">' + (smsStatus.configured ? '✅ Connected via <strong>' + esc(smsStatus.provider) + '</strong> — you can text application forms, reference requests and offer links.' : '📱 Not connected. Sign up for <strong>ClickSend</strong> (Aussie, simplest) or <strong>Twilio</strong>, then add the API keys as env vars and the “Text” buttons go live. Texts go out as your business name.') + '</div>' +
       (smsStatus.configured ? '<div style="display:flex;gap:.4rem;margin-top:.55rem;flex-wrap:wrap;align-items:center"><input id="smsTestTo" type="tel" placeholder="Your mobile, e.g. 0412 345 678" style="flex:1;min-width:12rem;padding:.45rem .6rem;border:1.5px solid var(--line-strong);border-radius:var(--r);font:inherit"><button class="btn btn-primary btn-sm" id="smsTestBtn">Send test text</button><button class="btn btn-ghost btn-sm" id="smsCheckBtn">Check connection</button></div><div class="muted" style="font-size:.84rem;margin-top:.35rem">Text yourself to confirm it works. If it says “sent” but nothing arrives, tap <strong>Check connection</strong> — or try <a href="#" id="smsTestPlain">sending without your sender name</a> (Aussie carriers often block letter-based sender names).</div><div id="smsTestMsg" class="muted" style="font-size:.84rem;margin-top:.3rem"></div>' : '') +
       '</div>' +
-      '<div style="margin-top:1rem"><strong>Auto-import applications (advanced)</strong><div class="muted" style="font-size:.88rem;margin-top:.2rem">Use Seek/Indeed as normal, then just hit <strong>“📥 Import from email”</strong> below to drop an applicant (and resume) in — no setup. For fully automatic, point an inbound-email service (CloudMailin/SendGrid) at <code style="font-size:.8rem">/api/inbound/' + esc(State.me.business.id) + '?key=YOUR_SECRET</code> and forward your application emails there.</div></div>' +
+      '<div style="margin-top:1rem"><strong>Auto-import from a resume inbox</strong><div class="muted" style="font-size:.88rem;margin-top:.2rem">' +
+      (inboxStatus.configured
+        ? '✅ Reading <strong>' + esc(inboxStatus.user) + '</strong>. Application emails (with resumes) that land here drop into your pipeline automatically, and the AI fills out their details + a quick summary. Forward your Seek/Indeed application emails here, or point your job-board notifications at it.'
+        : '📥 Not on yet. Connect a dedicated inbox and forward your Seek/Indeed application emails there — each becomes a candidate automatically. <strong>Easiest:</strong> a new Gmail with an app password (personal Outlook.com inboxes can’t be read this way — Microsoft now blocks password access). Ask me to switch it on.') +
+      '</div>' +
+      (inboxStatus.configured ? '<div style="margin-top:.5rem"><button class="btn btn-ghost btn-sm" id="inboxCheckBtn">Check inbox now</button><span id="inboxMsg" class="muted" style="font-size:.84rem"></span></div>' : '') +
+      '<div class="muted" style="font-size:.84rem;margin-top:.5rem">No inbox connected? Use <strong>“📥 Import from email”</strong> below to paste one in by hand any time.</div></div>' +
       '</div></details>';
     const careersLink = location.origin + '/jobs/' + State.me.business.id;
     const openings = jobOpenings || [];
@@ -929,6 +935,19 @@
         } else msg.innerHTML = 'Connected via ' + esc(d.provider) + '. ' + (d.note ? esc(d.note) : '');
       } catch (e) { msg.innerHTML = '<span style="color:#c0392b">Couldn’t check — ' + esc(e.message) + '</span>'; }
       scb.disabled = false; scb.textContent = t0;
+    };
+    const icb = $('#inboxCheckBtn'); if (icb) icb.onclick = async () => {
+      const msg = $('#inboxMsg'); const t0 = icb.textContent; icb.disabled = true; icb.textContent = 'Checking…'; msg.textContent = ' Checking your inbox…';
+      try {
+        const r = await api('POST', '/inbox/check');
+        if (r && r.ok) {
+          if (r.imported > 0) { msg.innerHTML = ' ✅ Imported ' + r.imported + ' new application' + (r.imported === 1 ? '' : 's') + ' — refreshing…'; setTimeout(viewHiring, 900); return; }
+          msg.innerHTML = ' ✅ Inbox checked — nothing new right now.';
+        } else if (r && r.reason === 'not_configured') msg.innerHTML = '<span style="color:#c0392b"> Inbox isn’t connected yet.</span>';
+        else if (r && r.reason === 'no_business') msg.innerHTML = '<span style="color:#c0392b"> Set IMAP_BIZ_ID to your business id in Render.</span>';
+        else msg.innerHTML = '<span style="color:#c0392b"> Couldn’t read the inbox' + (r && r.error ? ' — ' + esc(r.error) : '') + '. Check the email address and app password.</span>';
+      } catch (e) { msg.innerHTML = '<span style="color:#c0392b"> Something went wrong — ' + esc(e.message) + '</span>'; }
+      icb.disabled = false; icb.textContent = t0;
     };
     const pj = $('#postJob'); if (pj) pj.onclick = () => openJobModal(null);
     const cc = $('#copyCareers'); if (cc) cc.onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(careersLink); toast('Careers page link copied'); };

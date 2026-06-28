@@ -244,6 +244,70 @@ async function aiFillCandidateFromResume(businessId, candidateId, opts) {
   return { ok: true, filled, fields: f };
 }
 
+// ---------- auto-import from a resume inbox (OFF until IMAP_* env vars are set) ----------
+// Reads new application emails (e.g. Seek/Indeed forwards) from a dedicated mailbox over IMAP,
+// turns each into a candidate (+ resume) and runs the AI fill. Provider-agnostic — works with
+// any IMAP host that allows an app password (Gmail is the easy one; personal Outlook.com no
+// longer allows password/IMAP access). Polled by the cron and a manual "Check inbox now" button.
+const INBOX = {
+  configured: !!(process.env.IMAP_HOST && process.env.IMAP_USER && process.env.IMAP_PASS),
+  host: process.env.IMAP_HOST || '', port: Number(process.env.IMAP_PORT) || 993,
+  user: process.env.IMAP_USER || '', bizId: process.env.IMAP_BIZ_ID || ''
+};
+async function resolveInboxBiz() {
+  if (INBOX.bizId) return INBOX.bizId;
+  const rows = await db.prepare('SELECT id FROM businesses').all();
+  return (rows && rows.length === 1) ? rows[0].id : null; // single-tenant convenience
+}
+async function pollMailbox(opts) {
+  opts = opts || {};
+  if (!INBOX.configured) return { ok: false, reason: 'not_configured' };
+  const bizId = await resolveInboxBiz();
+  if (!bizId) return { ok: false, reason: 'no_business', note: 'Set IMAP_BIZ_ID to your business id.' };
+  const { ImapFlow } = require('imapflow');
+  const { simpleParser } = require('mailparser');
+  const client = new ImapFlow({ host: INBOX.host, port: INBOX.port, secure: true, auth: { user: INBOX.user, pass: process.env.IMAP_PASS }, logger: false });
+  const limit = opts.limit || 25;
+  let scanned = 0, imported = 0; const created = [];
+  try {
+    await client.connect();
+    const lock = await client.getMailboxLock('INBOX');
+    try {
+      const uids = (await client.search({ seen: false }, { uid: true })) || [];
+      for (const uid of uids.slice(0, limit)) {
+        scanned++;
+        let mail;
+        try {
+          const msg = await client.fetchOne(uid, { source: true }, { uid: true });
+          if (!msg || !msg.source) continue;
+          mail = await simpleParser(msg.source);
+        } catch (e) { console.error('mail parse failed:', e.message); continue; }
+        const subject = mail.subject || '';
+        const text = mail.text || (mail.html ? String(mail.html).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : '') || '';
+        let resume = null;
+        const atts = (mail.attachments || []).filter((a) => a && a.content && a.content.length);
+        const ra = atts.find((a) => /\.(pdf|docx?|rtf)$/i.test(a.filename || '') || /pdf|wordprocessing|msword|officedocument/i.test(a.contentType || '')) || atts[0];
+        if (ra) {
+          const b64 = Buffer.from(ra.content).toString('base64');
+          if (Math.floor(b64.length * 3 / 4) <= 8 * 1024 * 1024) resume = { name: ra.filename || 'resume', mime: ra.contentType || 'application/octet-stream', data: b64 };
+        }
+        const parsed = parseApplicationEmail(subject, text);
+        const id = await createApplicantCandidate(bizId, parsed, { note: text || null, resume });
+        if (AI.configured) { try { await aiFillCandidateFromResume(bizId, id, {}); } catch (e) {} }
+        try { await notifyManagers(bizId, 'application', 'New application — ' + (parsed.name || 'New applicant'), 'Auto-imported from your resume inbox', '#/candidate/' + id, null); } catch (e) {}
+        try { await client.messageFlagsAdd(uid, ['\\Seen'], { uid: true }); } catch (e) { console.error('flag Seen failed:', e.message); }
+        imported++; created.push(id);
+      }
+    } finally { lock.release(); }
+    await client.logout();
+    return { ok: true, scanned, imported, created };
+  } catch (e) {
+    try { await client.logout(); } catch (_) {}
+    console.error('mailbox poll failed:', e.message);
+    return { ok: false, reason: 'imap_failed', error: e.message };
+  }
+}
+
 const app = express();
 const PORT = process.env.PORT || 4000;
 const PUBLIC = path.join(__dirname, 'public');
@@ -601,7 +665,9 @@ app.get('/api/cron/run', h(async (req, res) => {
       await db.prepare('UPDATE interviews SET reminder_sent=1 WHERE candidate_id=?').run(i.candidate_id); remindersSent++;
     }
   }
-  res.json({ ok: true, prefillSent, remindersSent });
+  let inbox = { skipped: true };
+  if (INBOX.configured) { try { inbox = await pollMailbox({ limit: 25 }); } catch (e) { inbox = { ok: false, error: e.message }; } }
+  res.json({ ok: true, prefillSent, remindersSent, inbox });
 }));
 
 // ---------- everything below requires a login ----------
@@ -700,6 +766,12 @@ app.get('/api/legal-refs', (req, res) => res.json(legalRefs));
 app.get('/api/email-status', (req, res) => res.json({ configured: MAIL.configured, from: MAIL.from }));
 app.get('/api/sms-status', (req, res) => res.json({ configured: SMS.configured, provider: SMS.provider }));
 app.get('/api/ai-status', (req, res) => res.json({ configured: AI.configured, model: AI.model }));
+app.get('/api/inbox-status', (req, res) => res.json({ configured: INBOX.configured, user: INBOX.user, host: INBOX.host }));
+// Manually pull new application emails from the resume inbox right now (also runs on the cron).
+app.post('/api/inbox/check', h(async (req, res) => {
+  if (!INBOX.configured) return res.json({ ok: false, reason: 'not_configured' });
+  res.json(await pollMailbox({ limit: 25 }));
+}));
 // Send a real test text so the manager can prove the SMS connection actually works (not just env-vars-present).
 app.post('/api/sms/test', h(async (req, res) => {
   if (!SMS.configured) return res.json({ sent: false, reason: 'not_configured' });
