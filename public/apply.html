@@ -78,6 +78,7 @@
       '<div class="q"><div class="qlabel">Your name <span class="req">*</span></div><input type="text" id="apName" placeholder="First and last name"></div>' +
       '<div class="q"><div class="qlabel">Email</div><input type="email" id="apEmail" placeholder="you@email.com"></div>' +
       '<div class="q"><div class="qlabel">Mobile</div><input type="tel" id="apPhone" placeholder="0400 000 000"></div>' +
+      '<div class="q"><div class="qlabel">Your resume / CV</div><div class="qhelp">PDF or Word, if you\'ve got one handy (optional).</div><input type="file" id="apResume" accept=".pdf,.doc,.docx"><div id="apResumeName" class="qhelp"></div></div>' +
       fields +
       '<div id="err"></div>' +
       '<button class="btn btn-primary btn-block btn-lg" id="submit">Send application →</button>');
@@ -86,6 +87,8 @@
       inp.onchange = function () { answers[inp.name] = inp.value; inp.closest('[data-choice]').querySelectorAll('label').forEach(function (l) { l.classList.remove('sel'); }); inp.closest('label').classList.add('sel'); };
     });
     box.querySelectorAll('[data-text]').forEach(function (t) { t.oninput = function () { answers[t.getAttribute('data-text')] = t.value; }; });
+    var rf = document.getElementById('apResume');
+    if (rf) rf.onchange = function () { var f = rf.files && rf.files[0]; document.getElementById('apResumeName').textContent = f ? '📎 ' + f.name : ''; };
     document.getElementById('submit').onclick = submit;
   }
 
@@ -96,15 +99,26 @@
     if (missing.length) { document.getElementById('err').innerHTML = '<div class="error-msg">Please answer the questions marked with *.</div>'; return; }
     var btn = document.getElementById('submit');
     btn.disabled = true; btn.textContent = 'Sending…';
-    fetch('/api/public/job/' + token + '/apply', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name, email: document.getElementById('apEmail').value.trim(), phone: document.getElementById('apPhone').value.trim(), answers: answers })
-    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
-      .then(function (res) {
-        if (!res.ok) { document.getElementById('err').innerHTML = '<div class="error-msg">' + esc(res.j.error || 'Could not send') + '</div>'; btn.disabled = false; btn.textContent = 'Send application →'; return; }
-        var next = (data.whatNext || []).map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('');
-        box.innerHTML = card('<div class="fb-done"><div class="big">🙌</div><h1>' + esc(res.j.thanks || 'Thanks — your application is in.') + '</h1>' + (next ? '<ul class="next-list">' + next + '</ul>' : '') + '</div>');
-      });
+    var fi = document.getElementById('apResume');
+    var file = fi && fi.files && fi.files[0];
+    function doPost(resume) {
+      fetch('/api/public/job/' + token + '/apply', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name, email: document.getElementById('apEmail').value.trim(), phone: document.getElementById('apPhone').value.trim(), answers: answers, resume: resume })
+      }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+          if (!res.ok) { document.getElementById('err').innerHTML = '<div class="error-msg">' + esc(res.j.error || 'Could not send') + '</div>'; btn.disabled = false; btn.textContent = 'Send application →'; return; }
+          var next = (data.whatNext || []).map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('');
+          box.innerHTML = card('<div class="fb-done"><div class="big">🙌</div><h1>' + esc(res.j.thanks || 'Thanks — your application is in.') + '</h1>' + (next ? '<ul class="next-list">' + next + '</ul>' : '') + '</div>');
+        });
+    }
+    if (file) {
+      if (file.size > 6 * 1024 * 1024) { document.getElementById('err').innerHTML = '<div class="error-msg">Resume is too big (max ~6MB).</div>'; btn.disabled = false; btn.textContent = 'Send application →'; return; }
+      var fr = new FileReader();
+      fr.onload = function () { doPost({ name: file.name, mime: file.type || 'application/octet-stream', data: String(fr.result) }); };
+      fr.onerror = function () { doPost(null); };
+      fr.readAsDataURL(file);
+    } else { doPost(null); }
   }
 })();
 </script>

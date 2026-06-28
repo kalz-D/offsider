@@ -878,16 +878,17 @@
       return '<div class="card card-pad" style="margin-bottom:.6rem"><div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start"><div class="grow"><strong>' + esc(j.title) + '</strong> ' + (j.status === 'open' ? '<span class="badge badge-positive">Open</span>' : '<span class="badge">Closed</span>') + (j.applicants ? ' <span class="muted" style="font-size:.85rem">· ' + j.applicants + ' applicant' + (j.applicants === 1 ? '' : 's') + '</span>' : '') + ([j.location, j.employment_type, j.pay_note].filter(Boolean).length ? '<div class="muted" style="font-size:.85rem">' + [j.location, j.employment_type, j.pay_note].filter(Boolean).map(esc).join(' · ') + '</div>' : '') + '</div><button class="btn btn-ghost btn-sm job-edit" data-id="' + j.id + '">edit</button></div>' +
         (j.status === 'open' ? '<div class="link-box" style="margin-top:.5rem"><code>' + esc(applyLink) + '</code><button class="btn btn-ghost btn-sm job-copy" data-l="' + esc(applyLink) + '">Copy apply link</button></div>' : '') + '</div>';
     };
-    const openingsSection = '<div class="section-title"><h3>📣 Job openings — your own front door</h3><button class="btn btn-primary btn-sm" id="postJob">+ Post a job</button></div>' +
-      '<p class="muted" style="max-width:66ch;margin-top:-.3rem">Post a role and get a link to drop into your Seek/Indeed ad or socials. When someone applies, they land <strong>straight in your pipeline below</strong> — no re-typing, you own them from the first click.</p>' +
-      (openings.length ? openings.map(openingRow).join('') + '<div class="link-box" style="margin-top:.4rem"><code>' + esc(careersLink) + '</code><button class="btn btn-ghost btn-sm" id="copyCareers">📋 Your careers page (all roles)</button></div>' : '<div class="muted">No openings yet — post one to get a shareable apply link.</div>');
+    const openingsSection = '<div class="section-title" style="margin-top:2.4rem"><h3>📣 Share a job link (your site &amp; socials)</h3><button class="btn btn-ghost btn-sm" id="postJob">+ Post a job</button></div>' +
+      '<p class="muted" style="max-width:66ch;margin-top:-.3rem">Post a role and get a link to drop on your <strong>website, Facebook, Instagram or LinkedIn</strong> — anyone who clicks applies (resume and all) straight into your pipeline. Works as the “apply” link for Indeed too. <span style="color:var(--ink-faint)">(Seek needs a different setup — ask if you want it.)</span></p>' +
+      (openings.length ? openings.map(openingRow).join('') + '<div class="link-box" style="margin-top:.4rem"><code>' + esc(careersLink) + '</code><button class="btn btn-ghost btn-sm" id="copyCareers">📋 Your careers page (all roles)</button></div>' : '<div class="muted">No openings yet — post one to get a shareable apply link for your socials.</div>');
 
-    const body = setupPanel + openingsSection +
-      '<div class="section-title" style="margin-top:1.8rem"><h3>Hiring pipeline</h3><button class="btn btn-primary btn-sm" id="addCand">+ Add a candidate</button></div>' +
+    const body = setupPanel +
+      '<div class="section-title"><h3>Hiring pipeline</h3><button class="btn btn-primary btn-sm" id="addCand">+ Add a candidate</button></div>' +
       '<p class="muted" style="max-width:64ch;margin-top:-.3rem">From first application to first day. Add a candidate, send them a quick form, run a fair interview, make an offer — and when they accept, turn them into a worker with onboarding ready to go.</p>' +
       (active.length ? '<div class="row-list">' + active.map(row).join('') + '</div>'
         : '<div class="empty"><span class="ic">🧑‍💼</span>No one in the pipeline yet.<br>Add a candidate to get started.<br><button class="btn btn-primary" style="margin-top:1.2rem" id="addCand2">+ Add a candidate</button></div>') +
-      (done.length ? '<div class="section-title" style="margin-top:1.8rem"><h3>Closed (' + done.length + ')</h3></div><div class="row-list">' + done.map(row).join('') + '</div>' : '');
+      (done.length ? '<div class="section-title" style="margin-top:1.8rem"><h3>Closed (' + done.length + ')</h3></div><div class="row-list">' + done.map(row).join('') + '</div>' : '') +
+      openingsSection;
     layout('hiring', 'Hiring', body);
     const a = $('#addCand'); if (a) a.onclick = openAddCandidate;
     const a2 = $('#addCand2'); if (a2) a2.onclick = openAddCandidate;

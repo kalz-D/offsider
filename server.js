@@ -385,6 +385,13 @@ app.post('/api/public/job/:token/apply', h(async (req, res) => {
   const id = uid(); const token = newToken();
   await db.prepare('INSERT INTO candidates (id, business_id, name, email, phone, role_applied, status, token, application, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
     .run(id, job.business_id, String(b.name).trim(), b.email || null, b.phone || null, job.title || null, 'applied', token, JSON.stringify(b.answers || {}), now(), now());
+  if (b.resume && b.resume.data && b.resume.name) {
+    const data = String(b.resume.data).replace(/^data:[^,]*,/, '');
+    if (Math.floor(data.length * 3 / 4) <= 6 * 1024 * 1024) {
+      await db.prepare('INSERT INTO candidate_files (id, business_id, candidate_id, kind, name, mime, data, created_at) VALUES (?,?,?,?,?,?,?,?)')
+        .run(uid(), job.business_id, id, 'resume', String(b.resume.name).slice(0, 200), b.resume.mime || 'application/octet-stream', data, now());
+    }
+  }
   await notifyManagers(job.business_id, 'application', 'New application — ' + String(b.name).trim(), (job.title || 'a role') + ' · applied via your careers page', '#/candidate/' + id, null);
   res.json({ ok: true, thanks: careersCopy.thanks });
 }));
