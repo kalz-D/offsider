@@ -52,6 +52,42 @@ async function sendEmail({ to, subject, text, attachments }) {
 }
 function fmtWhen(iso) { try { return new Date(iso).toLocaleString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }); } catch (e) { return iso; } }
 
+// SMS sending is OFF until a provider's creds are set. Supports Twilio or ClickSend (native fetch, no SDK).
+const SMS = (function () {
+  if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM) return { configured: true, provider: 'twilio', from: process.env.TWILIO_FROM };
+  if (process.env.CLICKSEND_USERNAME && process.env.CLICKSEND_API_KEY) return { configured: true, provider: 'clicksend', from: process.env.CLICKSEND_FROM || '' };
+  return { configured: false, provider: null, from: '' };
+})();
+function toE164AU(phone) {
+  let p = String(phone || '').replace(/[^\d+]/g, '');
+  if (!p) return '';
+  if (p[0] === '+') return p;
+  if (p.startsWith('61')) return '+' + p;
+  if (p[0] === '0') return '+61' + p.slice(1);
+  return '+61' + p;
+}
+async function sendSms({ to, body }) {
+  if (!SMS.configured) return { sent: false, reason: 'not_configured' };
+  const num = toE164AU(to);
+  if (!num) return { sent: false, reason: 'no_phone' };
+  try {
+    if (SMS.provider === 'twilio') {
+      const sid = process.env.TWILIO_ACCOUNT_SID;
+      const auth = 'Basic ' + Buffer.from(sid + ':' + process.env.TWILIO_AUTH_TOKEN).toString('base64');
+      const r = await fetch('https://api.twilio.com/2010-04-01/Accounts/' + sid + '/Messages.json', { method: 'POST', headers: { Authorization: auth, 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ From: SMS.from, To: num, Body: body }) });
+      if (!r.ok) throw new Error('twilio ' + r.status + ' ' + (await r.text()).slice(0, 140));
+      return { sent: true };
+    }
+    if (SMS.provider === 'clicksend') {
+      const auth = 'Basic ' + Buffer.from(process.env.CLICKSEND_USERNAME + ':' + process.env.CLICKSEND_API_KEY).toString('base64');
+      const r = await fetch('https://rest.clicksend.com/v3/sms/send', { method: 'POST', headers: { Authorization: auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ messages: [{ from: SMS.from || undefined, to: num, body: body }] }) });
+      if (!r.ok) throw new Error('clicksend ' + r.status + ' ' + (await r.text()).slice(0, 140));
+      return { sent: true };
+    }
+    return { sent: false, reason: 'not_configured' };
+  } catch (e) { console.error('sms send failed:', e.message); return { sent: false, reason: 'send_failed', error: e.message }; }
+}
+
 const app = express();
 const PORT = process.env.PORT || 4000;
 const PUBLIC = path.join(__dirname, 'public');
@@ -333,13 +369,16 @@ app.get('/api/cron/run', h(async (req, res) => {
   const nowMs = Date.now();
   let prefillSent = 0, remindersSent = 0;
   const host = req.get('host');
-  const rows = await db.prepare('SELECT i.*, c.name AS candidate_name, c.email AS candidate_email, c.token AS candidate_token, c.application AS application FROM interviews i JOIN candidates c ON c.id=i.candidate_id WHERE i.scheduled_at IS NOT NULL').all();
+  const rows = await db.prepare('SELECT i.*, c.name AS candidate_name, c.email AS candidate_email, c.phone AS candidate_phone, c.token AS candidate_token, c.application AS application, b.name AS biz_name FROM interviews i JOIN candidates c ON c.id=i.candidate_id JOIN businesses b ON b.id=i.business_id WHERE i.scheduled_at IS NOT NULL').all();
   for (const i of rows) {
     const t = Date.parse(i.scheduled_at); if (isNaN(t)) continue;
     const hoursTo = (t - nowMs) / 3600000;
-    if (!i.prefill_sent && !i.application && i.candidate_email && hoursTo <= 24 && hoursTo > 0) {
+    if (!i.prefill_sent && !i.application && hoursTo <= 24 && hoursTo > 0) {
       const link = 'https://' + host + '/c/' + i.candidate_token;
-      const r = await sendEmail({ to: i.candidate_email, subject: 'Quick form before your interview', text: 'Hi ' + (i.candidate_name || '').split(' ')[0] + ',\n\nLooking forward to your interview. Could you fill out this quick form beforehand? Takes a couple of minutes.\n\n' + link + '\n\nCheers' });
+      const fn = (i.candidate_name || '').split(' ')[0];
+      let r = { sent: false };
+      if (i.candidate_email) r = await sendEmail({ to: i.candidate_email, subject: 'Quick form before your interview', text: 'Hi ' + fn + ',\n\nLooking forward to your interview. Could you fill out this quick form beforehand? Takes a couple of minutes.\n\n' + link + '\n\nCheers,\n' + (i.biz_name || '') });
+      if (!r.sent && i.candidate_phone) r = await sendSms({ to: i.candidate_phone, body: (i.biz_name || 'Hi') + ': Hi ' + fn + ', quick form before your interview (2 min): ' + link });
       if (r.sent) { await db.prepare('UPDATE interviews SET prefill_sent=1 WHERE candidate_id=?').run(i.candidate_id); prefillSent++; }
     }
     if (!i.reminder_sent && hoursTo <= 4 && hoursTo > 0) {
@@ -444,6 +483,7 @@ app.post('/api/me/lessons/:lessonId/submit', h(async (req, res) => {
 app.get('/api/app-kit', (req, res) => res.json({ worklog: worklogKit, leaveTypes: leaveTypes.types || [], leaveTip: leaveTypes.tip || '', suggestions: suggestionKit }));
 app.get('/api/legal-refs', (req, res) => res.json(legalRefs));
 app.get('/api/email-status', (req, res) => res.json({ configured: MAIL.configured, from: MAIL.from }));
+app.get('/api/sms-status', (req, res) => res.json({ configured: SMS.configured, provider: SMS.provider }));
 app.get('/api/wellbeing', h(async (req, res) => {
   const st = await db.prepare('SELECT * FROM business_settings WHERE business_id = ?').get(req.business.id);
   const eap = (st && (st.eap_name || st.eap_phone || st.eap_url)) ? { name: st.eap_name, phone: st.eap_phone, url: st.eap_url, notes: st.eap_notes } : null;
@@ -996,22 +1036,35 @@ app.get('/api/interviews/upcoming', h(async (req, res) => {
 app.post('/api/candidates/:id/send-application', h(async (req, res) => {
   const c = await db.prepare('SELECT * FROM candidates WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
   if (!c) return res.status(404).json({ error: 'Not found' });
-  if (!c.email) return res.json({ sent: false, reason: 'no_email' });
+  const channel = (req.body && req.body.channel) || 'email';
   const link = 'https://' + req.get('host') + '/c/' + c.token;
   const fn = c.name.split(' ')[0];
+  if (channel === 'sms') {
+    if (!c.phone) return res.json({ sent: false, reason: 'no_phone' });
+    const r = await sendSms({ to: c.phone, body: req.business.name + ': Hi ' + fn + ', thanks for your interest. Quick form before we chat (2 min): ' + link });
+    return res.json(Object.assign({ to: c.phone, link, channel }, r));
+  }
+  if (!c.email) return res.json({ sent: false, reason: 'no_email' });
   const body = 'Hi ' + fn + ',\n\nThanks for your interest in the ' + (c.role_applied || 'role') + ' at ' + req.business.name + '. Before we have a chat, could you fill out this quick form? It only takes a couple of minutes.\n\n' + link + '\n\nCheers,\n' + req.user.name + '\n' + req.business.name;
   const r = await sendEmail({ to: c.email, subject: 'Quick application form — ' + req.business.name, text: body });
-  res.json(Object.assign({ to: c.email, link }, r));
+  res.json(Object.assign({ to: c.email, link, channel }, r));
 }));
 app.post('/api/references/:id/send', h(async (req, res) => {
   const r = await db.prepare('SELECT * FROM candidate_references WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
   if (!r) return res.status(404).json({ error: 'Not found' });
-  if (!r.email) return res.json({ sent: false, reason: 'no_email' });
+  const channel = (req.body && req.body.channel) || 'email';
   const c = await db.prepare('SELECT name, role_applied FROM candidates WHERE id=?').get(r.candidate_id);
   const link = 'https://' + req.get('host') + '/r/' + r.token;
+  if (channel === 'sms') {
+    if (!r.phone) return res.json({ sent: false, reason: 'no_phone' });
+    const msg = req.business.name + ': Hi ' + (r.referee_name || 'there') + ', ' + (c ? c.name : 'a candidate') + ' listed you as a referee. Quick confidential reference here: ' + link;
+    const sr = await sendSms({ to: r.phone, body: msg });
+    return res.json(Object.assign({ to: r.phone, link, channel }, sr));
+  }
+  if (!r.email) return res.json({ sent: false, reason: 'no_email' });
   const body = 'Hi ' + (r.referee_name || 'there') + ',\n\n' + req.user.name + ' from ' + req.business.name + ' here. ' + (c ? c.name : 'A candidate') + ' has applied for ' + (c && c.role_applied ? 'the ' + c.role_applied + ' role' : 'a role') + ' and listed you as a referee. Could you fill out a short, confidential reference here? It only takes a few minutes:\n\n' + link + '\n\nThanks very much,\n' + req.user.name + '\n' + req.business.name;
   const er = await sendEmail({ to: r.email, subject: 'Reference request — ' + (c ? c.name : 'a candidate'), text: body });
-  res.json(Object.assign({ to: r.email, link }, er));
+  res.json(Object.assign({ to: r.email, link, channel }, er));
 }));
 
 // ---------- worker-app management: plans, productivity, leave, suggestions ----------
@@ -1175,8 +1228,14 @@ app.delete('/api/files/:id', h(async (req, res) => {
 app.post('/api/candidates/:id/send-offer', h(async (req, res) => {
   const c = await db.prepare('SELECT * FROM candidates WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
   if (!c) return res.status(404).json({ error: 'Not found' });
-  if (!c.email) return res.json({ sent: false, reason: 'no_email' });
   const b = req.body || {};
+  if (b.channel === 'sms') {
+    if (!c.phone) return res.json({ sent: false, reason: 'no_phone' });
+    const link = 'https://' + req.get('host') + '/c/' + c.token;
+    const sr = await sendSms({ to: c.phone, body: req.business.name + ': Great news ' + c.name.split(' ')[0] + '! We\'d like to offer you the ' + (c.role_applied || 'role') + '. Details & accept here: ' + link });
+    return res.json(Object.assign({ to: c.phone, channel: 'sms' }, sr));
+  }
+  if (!c.email) return res.json({ sent: false, reason: 'no_email' });
   const attachments = [];
   if (b.attachContract) {
     const f = await db.prepare("SELECT * FROM business_files WHERE business_id=? AND kind='contract' ORDER BY created_at DESC").get(req.business.id);

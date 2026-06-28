@@ -56,6 +56,15 @@
   async function getAppKit() { if (!State.appKit) State.appKit = await api('GET', '/app-kit'); return State.appKit; }
   async function getLegalRefs() { if (!State.legalRefs) State.legalRefs = await api('GET', '/legal-refs'); return State.legalRefs; }
   function fileToB64(file) { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = rej; r.readAsDataURL(file); }); }
+  function reportSend(r, channel) {
+    const isSms = channel === 'sms';
+    if (r && r.sent) { toast((isSms ? 'Texted to ' : 'Emailed to ') + r.to + (isSms ? ' 📱' : ' 📨')); return; }
+    const reason = r && r.reason;
+    if (reason === 'not_configured') toast((isSms ? 'Texting' : 'Email') + ' not connected yet — turn it on in Hiring set-up', 'error');
+    else if (reason === 'no_phone') toast('No phone number on file', 'error');
+    else if (reason === 'no_email') toast('No email on file', 'error');
+    else toast('Couldn\'t send' + (r && r.error ? ' — ' + r.error : ''), 'error');
+  }
 
   // ---- notifications (shared by managers + staff) ----
   function bellHtml() { return '<button class="bell" id="notifBell" title="Notifications">🔔<span class="notif-dot" id="notifDot" style="display:none"></span></button>'; }
@@ -849,7 +858,7 @@
   function statusBadge(s) { const m = CAND_STATUS[s] || { label: s, cls: '' }; return '<span class="badge ' + m.cls + '">' + esc(m.label) + '</span>'; }
 
   async function viewHiring() {
-    const [cands, contracts, emailStatus] = await Promise.all([api('GET', '/candidates'), api('GET', '/files?kind=contract').catch(() => []), api('GET', '/email-status').catch(() => ({ configured: false }))]);
+    const [cands, contracts, emailStatus, smsStatus] = await Promise.all([api('GET', '/candidates'), api('GET', '/files?kind=contract').catch(() => []), api('GET', '/email-status').catch(() => ({ configured: false })), api('GET', '/sms-status').catch(() => ({ configured: false }))]);
     const closedSet = { hired: 1, rejected: 1, declined: 1 };
     const active = cands.filter((c) => !closedSet[c.status]);
     const done = cands.filter((c) => closedSet[c.status]);
@@ -859,7 +868,8 @@
       '<strong>Employment contract</strong><div class="muted" style="font-size:.88rem;margin:.2rem 0 .5rem">Upload your standard contract once. It can be attached to offers and downloaded any time.</div>' +
       (contract ? '<div class="link-box"><code>📄 ' + esc(contract.name) + '</code><a href="/api/files/' + contract.id + '/download" target="_blank" class="btn btn-ghost btn-sm">View</a><button class="btn btn-ghost btn-sm" id="delContract">Remove</button></div>' : '') +
       '<label class="btn btn-ghost btn-sm" style="margin-top:.4rem;cursor:pointer">' + (contract ? '↻ Replace contract' : '⬆ Upload contract') + '<input type="file" id="contractFile" accept=".pdf,.doc,.docx" style="display:none"></label>' +
-      '<div style="margin-top:1rem"><strong>Sending offers by email</strong><div class="muted" style="font-size:.88rem;margin-top:.2rem">' + (emailStatus.configured ? '✅ Connected as <strong>' + esc(emailStatus.from) + '</strong> — you can send offers straight from the app.' : '✉️ Not connected yet — offers are copy-and-paste for now. Add your email’s SMTP details (env vars) to switch on one-click send.') + '</div></div>' +
+      '<div style="margin-top:1rem"><strong>Sending by email</strong><div class="muted" style="font-size:.88rem;margin-top:.2rem">' + (emailStatus.configured ? '✅ Connected as <strong>' + esc(emailStatus.from) + '</strong> — you can email forms and offers straight from the app.' : '✉️ Not connected yet — copy-and-paste for now. Add your email’s SMTP details (env vars) to switch on one-click send.') + '</div></div>' +
+      '<div style="margin-top:1rem"><strong>Texting (SMS)</strong><div class="muted" style="font-size:.88rem;margin-top:.2rem">' + (smsStatus.configured ? '✅ Connected via <strong>' + esc(smsStatus.provider) + '</strong> — you can text application forms, reference requests and offer links.' : '📱 Not connected. Sign up for <strong>ClickSend</strong> (Aussie, simplest) or <strong>Twilio</strong>, then add the API keys as env vars and the “Text” buttons go live. Texts go out as your business name.') + '</div></div>' +
       '</div></details>';
     const body = setupPanel +
       '<div class="section-title"><h3>Hiring pipeline</h3><button class="btn btn-primary btn-sm" id="addCand">+ Add a candidate</button></div>' +
@@ -901,7 +911,7 @@
       const fl = {}; (kit.applicationFields || []).forEach((f) => { fl[f.id] = f.label; });
       appHtml = '<div class="row-list">' + Object.keys(c.application).map((k) => '<div class="resp-card" style="margin:0 0 .5rem"><div class="resp-q">' + esc(fl[k] || k) + '</div><div class="resp-a">' + esc(c.application[k] || '—') + '</div></div>').join('') + '</div>';
     } else {
-      appHtml = '<div class="panel"><strong>Send them this application link</strong><div class="muted" style="font-size:.9rem;margin:.2rem 0">A short, lawful form — right to work, ability to do the role, availability. They fill it on their phone, no login.</div><div class="link-box"><code>' + esc(link) + '</code><button class="btn btn-primary btn-sm" id="copyApp">Copy</button></div></div>';
+      appHtml = '<div class="panel"><strong>Send them this application link</strong><div class="muted" style="font-size:.9rem;margin:.2rem 0">A short, lawful form — right to work, ability to do the role, availability. They fill it on their phone, no login.</div><div class="link-box"><code>' + esc(link) + '</code><button class="btn btn-primary btn-sm" id="copyApp">Copy</button></div>' + ((c.email || c.phone) ? '<div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem">' + (c.email ? '<button class="btn btn-ghost btn-sm" id="sendAppEmail2">✉️ Email it</button>' : '') + (c.phone ? '<button class="btn btn-ghost btn-sm" id="sendAppSms2">📱 Text it</button>' : '') + '</div>' : '') + '</div>';
     }
 
     // interview questions
@@ -930,7 +940,7 @@
       const rlink = location.origin + '/r/' + r.token;
       const sb = r.status === 'received' ? '<span class="badge badge-positive">Received ✓</span>' : '<span class="badge">Awaiting</span>';
       const ans = r.answers ? '<details style="margin-top:.5rem"><summary class="muted" style="cursor:pointer">View answers</summary>' + (refKit.questions || []).map((q, i) => r.answers['r' + i] ? ('<div class="resp-q" style="margin-top:.4rem">' + esc(fillRef(q.question)) + '</div><div class="resp-a">' + esc(r.answers['r' + i]) + '</div>') : '').join('') + (r.notes ? '<div class="resp-q" style="margin-top:.4rem">Your notes</div><div class="resp-a">' + esc(r.notes) + '</div>' : '') + '</details>' : '';
-      return '<div class="card card-pad" style="margin-bottom:.6rem"><div><strong>' + esc(r.referee_name || 'Referee') + '</strong> ' + sb + '<div class="muted" style="font-size:.86rem">' + [r.relationship, r.company, r.phone, r.email].filter(Boolean).map(esc).join(' · ') + '</div></div><div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.6rem"><button class="btn btn-ghost btn-sm ref-copy" data-l="' + esc(rlink) + '">📋 Copy link</button>' + (r.email ? '<button class="btn btn-ghost btn-sm ref-send" data-id="' + r.id + '">✉️ Email request</button>' : '<button class="btn btn-ghost btn-sm ref-email" data-id="' + r.id + '">✉️ Email text</button>') + '<button class="btn btn-primary btn-sm ref-fill" data-id="' + r.id + '">' + (r.status === 'received' ? 'Edit answers' : 'Record by phone') + '</button></div>' + ans + '</div>';
+      return '<div class="card card-pad" style="margin-bottom:.6rem"><div><strong>' + esc(r.referee_name || 'Referee') + '</strong> ' + sb + '<div class="muted" style="font-size:.86rem">' + [r.relationship, r.company, r.phone, r.email].filter(Boolean).map(esc).join(' · ') + '</div></div><div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.6rem"><button class="btn btn-ghost btn-sm ref-copy" data-l="' + esc(rlink) + '">📋 Copy link</button>' + (r.email ? '<button class="btn btn-ghost btn-sm ref-send" data-id="' + r.id + '">✉️ Email request</button>' : '<button class="btn btn-ghost btn-sm ref-email" data-id="' + r.id + '">✉️ Email text</button>') + (r.phone ? '<button class="btn btn-ghost btn-sm ref-send-sms" data-id="' + r.id + '">📱 Text request</button>' : '') + '<button class="btn btn-primary btn-sm ref-fill" data-id="' + r.id + '">' + (r.status === 'received' ? 'Edit answers' : 'Record by phone') + '</button></div>' + ans + '</div>';
     };
     const refSection = '<div class="section-title" style="margin-top:1.8rem"><h3>📞 Reference checks</h3><button class="btn btn-primary btn-sm" id="addReferee">+ Add a referee</button></div>' +
       '<details class="dna" style="border-color:var(--brand);background:var(--brand-50)"><summary style="color:var(--brand)">📋 How to run a reference call (script + what to ask)</summary><div class="dna-body"><p style="margin:.6rem 0;white-space:pre-wrap">' + esc(fillRef(refKit.intro)) + '</p><div class="dna-instead">' + esc(refKit.lawfulNote || '') + ' ' + refChip('references', 'reference checking privacy consent discrimination', 'Reference checks') + '</div></div></details>' +
@@ -941,7 +951,7 @@
 
     const sched = c.schedule;
     const scheduleBlock = (sched && sched.scheduled_at)
-      ? '<div class="panel" style="margin:1.2rem 0;background:var(--brand-50);border-color:var(--brand)"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem"><div><strong>📅 Interview booked</strong><div style="font-family:var(--font-head);font-weight:800;font-size:1.1rem;margin-top:.2rem">' + esc(fmtDateTime(sched.scheduled_at)) + '</div>' + (sched.location ? '<div class="muted">📍 ' + esc(sched.location) + '</div>' : '') + (sched.note ? '<div class="muted" style="font-size:.88rem;margin-top:.2rem">' + esc(sched.note) + '</div>' : '') + '</div><button class="btn btn-ghost btn-sm" id="schedBtn">Reschedule</button></div>' + (c.email ? '<div style="margin-top:.7rem"><button class="btn btn-ghost btn-sm" id="sendAppBtn">✉️ Send them the form now</button></div>' : '') + '</div>'
+      ? '<div class="panel" style="margin:1.2rem 0;background:var(--brand-50);border-color:var(--brand)"><div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem"><div><strong>📅 Interview booked</strong><div style="font-family:var(--font-head);font-weight:800;font-size:1.1rem;margin-top:.2rem">' + esc(fmtDateTime(sched.scheduled_at)) + '</div>' + (sched.location ? '<div class="muted">📍 ' + esc(sched.location) + '</div>' : '') + (sched.note ? '<div class="muted" style="font-size:.88rem;margin-top:.2rem">' + esc(sched.note) + '</div>' : '') + '</div><button class="btn btn-ghost btn-sm" id="schedBtn">Reschedule</button></div>' + ((c.email || c.phone) ? '<div style="margin-top:.7rem;display:flex;gap:.5rem;flex-wrap:wrap">' + (c.email ? '<button class="btn btn-ghost btn-sm" id="sendAppEmail">✉️ Email the form</button>' : '') + (c.phone ? '<button class="btn btn-ghost btn-sm" id="sendAppSms">📱 Text the form</button>' : '') + '</div>' : '') + '</div>'
       : '<div class="panel" style="margin:1.2rem 0;border-style:dashed"><strong>📅 Schedule the interview</strong><div class="muted" style="font-size:.9rem;margin:.2rem 0 .6rem">Pop in a time — you\'ll get a reminder, and (with email on) their form can auto-send the day before.</div><button class="btn btn-primary btn-sm" id="schedBtn">+ Book a time</button></div>';
     const resumeFiles = (c.files || []).filter((f) => f.kind === 'resume');
     const resumeFilesHtml = resumeFiles.length ? '<div class="row-list" style="margin-bottom:.6rem">' + resumeFiles.map((f) => '<div class="row" style="cursor:default"><span class="ic-circle">📎</span><span class="grow"><span class="t">' + esc(f.name) + '</span></span><span class="meta"><a href="/api/candidate-files/' + f.id + '/download" target="_blank" class="btn btn-ghost btn-sm">View</a> <button class="btn btn-ghost btn-sm cfile-del" data-id="' + f.id + '">✕</button></span></div>').join('') + '</div>' : '';
@@ -976,7 +986,10 @@
     };
     const sr = $('#saveResume'); if (sr) sr.onclick = async () => { await api('PATCH', '/candidates/' + id, { resume_text: $('#resume').value }); toast('Saved'); };
     const sb = $('#schedBtn'); if (sb) sb.onclick = () => openScheduleInterview(c);
-    const sa = $('#sendAppBtn'); if (sa) sa.onclick = async () => { const r = await api('POST', '/candidates/' + id + '/send-application'); toast(r.sent ? 'Form emailed to ' + r.to + ' 📨' : (r.reason === 'not_configured' ? 'Email not connected — copy the link instead' : r.reason === 'no_email' ? 'No email on file' : 'Could not send'), r.sent ? undefined : 'error'); };
+    const sae = $('#sendAppEmail'); if (sae) sae.onclick = async () => reportSend(await api('POST', '/candidates/' + id + '/send-application', { channel: 'email' }), 'email');
+    const sas = $('#sendAppSms'); if (sas) sas.onclick = async () => reportSend(await api('POST', '/candidates/' + id + '/send-application', { channel: 'sms' }), 'sms');
+    const sae2 = $('#sendAppEmail2'); if (sae2) sae2.onclick = async () => reportSend(await api('POST', '/candidates/' + id + '/send-application', { channel: 'email' }), 'email');
+    const sas2 = $('#sendAppSms2'); if (sas2) sas2.onclick = async () => reportSend(await api('POST', '/candidates/' + id + '/send-application', { channel: 'sms' }), 'sms');
     const rfu = $('#resumeFile'); if (rfu) rfu.onchange = async (e) => { const file = e.target.files[0]; if (!file) return; if (file.size > 6 * 1024 * 1024) { toast('File too big (max ~6MB)', 'error'); return; } toast('Uploading…'); const data = await fileToB64(file); await api('POST', '/candidates/' + id + '/files', { kind: 'resume', name: file.name, mime: file.type || 'application/octet-stream', data: data }); toast('Resume uploaded'); viewCandidate(id); };
     root().querySelectorAll('.cfile-del').forEach((b) => { b.onclick = async () => { await api('DELETE', '/candidate-files/' + b.getAttribute('data-id')); viewCandidate(id); }; });
     const mo = $('#makeOffer'); if (mo) mo.onclick = () => openOffer(c);
@@ -986,7 +999,8 @@
     const ar = $('#addReferee'); if (ar) ar.onclick = () => openAddReferee(id);
     root().querySelectorAll('.ref-copy').forEach((b) => { b.onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(b.getAttribute('data-l')); toast('Reference link copied'); }; });
     root().querySelectorAll('.ref-email').forEach((b) => { b.onclick = () => { const r = refs.find((x) => x.id === b.getAttribute('data-id')); if (r) openRefEmail(r, refKit, c); }; });
-    root().querySelectorAll('.ref-send').forEach((b) => { b.onclick = async () => { const res = await api('POST', '/references/' + b.getAttribute('data-id') + '/send'); toast(res.sent ? 'Reference request emailed to ' + res.to + ' 📨' : (res.reason === 'not_configured' ? 'Email not connected — use Copy link instead' : 'Could not send'), res.sent ? undefined : 'error'); }; });
+    root().querySelectorAll('.ref-send').forEach((b) => { b.onclick = async () => reportSend(await api('POST', '/references/' + b.getAttribute('data-id') + '/send', { channel: 'email' }), 'email'); });
+    root().querySelectorAll('.ref-send-sms').forEach((b) => { b.onclick = async () => reportSend(await api('POST', '/references/' + b.getAttribute('data-id') + '/send', { channel: 'sms' }), 'sms'); });
     root().querySelectorAll('.ref-fill').forEach((b) => { b.onclick = () => { const r = refs.find((x) => x.id === b.getAttribute('data-id')); if (r) openReferenceAnswers(r, refKit, c); }; });
   }
 
@@ -1054,10 +1068,11 @@
         (contract ? '<label class="check-item" style="margin:.2rem 0 .8rem"><input type="checkbox" id="oAttach" checked><span><span class="ci-label">📎 Attach our employment contract</span><br><span class="ci-help">' + esc(contract.name) + '</span></span></label>' : '') +
         '<div class="field"><label>Their accept link</label><div class="link-box"><code>' + esc(acceptLink) + '</code><button class="btn btn-ghost btn-sm" id="copyAccept">Copy</button></div></div>' +
         (canSend ? '' : '<div class="muted" style="font-size:.85rem;margin-bottom:.6rem">No email on file for ' + esc(c.name.split(' ')[0]) + ' — add one on their profile to send directly.</div>') +
-        '<div class="modal-foot"><button class="btn btn-ghost" id="oClose">Close</button><button class="btn btn-ghost" id="copyBody">Copy</button>' + (canSend ? '<button class="btn btn-primary" id="sendEmail">✉️ Send to ' + esc(c.email) + '</button>' : '') + '</div>');
+        '<div class="modal-foot"><button class="btn btn-ghost" id="oClose">Close</button><button class="btn btn-ghost" id="copyBody">Copy</button>' + (c.phone ? '<button class="btn btn-ghost" id="sendSms">📱 Text link</button>' : '') + (canSend ? '<button class="btn btn-primary" id="sendEmail">✉️ Send to ' + esc(c.email) + '</button>' : '') + '</div>');
       $('#copyBody').onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(r.subject + '\n\n' + r.body); toast('Offer email copied'); };
       $('#copyAccept').onclick = () => { if (navigator.clipboard) navigator.clipboard.writeText(acceptLink); toast('Accept link copied'); };
       $('#oClose').onclick = () => { closeModal(); viewCandidate(c.id); };
+      const ss2 = $('#sendSms'); if (ss2) ss2.onclick = async () => { ss2.disabled = true; ss2.textContent = 'Texting…'; const res = await api('POST', '/candidates/' + c.id + '/send-offer', { channel: 'sms' }); if (res.sent) { toast('Texted to ' + res.to + ' 📱'); closeModal(); viewCandidate(c.id); } else { ss2.disabled = false; ss2.textContent = '📱 Text link'; reportSend(res, 'sms'); } };
       const se = $('#sendEmail'); if (se) se.onclick = async () => {
         se.disabled = true; se.textContent = 'Sending…';
         const att = $('#oAttach') ? $('#oAttach').checked : false;
