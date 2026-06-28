@@ -25,6 +25,7 @@ const referenceKit = require('./content/referenceKit');
 const worklogKit = require('./content/worklogKit');
 const leaveTypes = require('./content/leaveTypes');
 const suggestionKit = require('./content/suggestionKit');
+const legalRefs = require('./content/legalRefs');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -389,8 +390,9 @@ app.post('/api/me/lessons/:lessonId/submit', h(async (req, res) => {
   res.json({ passed, correct, total, score, signed });
 }));
 
-// ---------- shared (any logged-in user): app kit + notifications ----------
+// ---------- shared (any logged-in user): app kit + legal refs + notifications ----------
 app.get('/api/app-kit', (req, res) => res.json({ worklog: worklogKit, leaveTypes: leaveTypes.types || [], leaveTip: leaveTypes.tip || '', suggestions: suggestionKit }));
+app.get('/api/legal-refs', (req, res) => res.json(legalRefs));
 app.get('/api/notifications/mine', h(async (req, res) => {
   const rows = await db.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY read ASC, created_at DESC LIMIT 50').all(req.user.id);
   res.json(rows.map((n) => ({ id: n.id, kind: n.kind, title: n.title, body: n.body, link: n.link, read: !!n.read, created_at: n.created_at })));

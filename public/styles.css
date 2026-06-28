@@ -515,3 +515,24 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--b
 /* productivity */
 .prod-bar { width: 80px; height: 8px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
 .prod-fill { height: 100%; background: var(--brand); border-radius: 999px; }
+
+/* ---------- Legal backing / references ---------- */
+.legal-domain { border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); margin-bottom: .7rem; overflow: hidden; }
+.legal-domain > summary { cursor: pointer; padding: 1rem 1.2rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem; list-style: none; }
+.legal-domain > summary::-webkit-details-marker { display: none; }
+.legal-domain > summary::before { content: '▸'; color: var(--ink-faint); margin-right: .2rem; transition: transform .15s ease; }
+.legal-domain[open] > summary::before { transform: rotate(90deg); }
+.legal-domain .ld-title { font-family: var(--font-head); font-weight: 800; font-size: 1.05rem; flex: 1; }
+.legal-domain .ld-body { padding: 0 1.2rem 1.1rem; }
+.src-chips { display: flex; flex-wrap: wrap; gap: .4rem; margin: .3rem 0 1rem; }
+.src-chip { display: inline-block; background: var(--brand-50); color: var(--brand-700); border: 1px solid var(--brand); border-radius: 999px; padding: .3rem .8rem; font-size: .82rem; font-weight: 600; text-decoration: none; }
+.src-chip:hover { background: var(--brand); color: #fff; text-decoration: none; }
+.legal-ref { border-left: 3px solid var(--line-strong); padding: .2rem 0 .2rem .9rem; margin: .9rem 0; }
+.legal-ref .lr-top { display: flex; align-items: center; gap: .5rem; margin-bottom: .2rem; }
+.legal-ref .lr-claim { font-weight: 600; }
+.legal-ref .lr-basis { font-size: .9rem; color: var(--ink-soft); margin: .25rem 0; }
+.legal-ref .lr-src { font-size: .85rem; margin-top: .35rem; }
+.legal-ref .lr-src a { color: var(--brand-700); }
+.legal-ref .lr-app { font-size: .8rem; color: var(--ink-faint); margin-top: .3rem; font-style: italic; }
+.lr-note { font-size: .82rem; color: var(--ink-faint); background: var(--positive-50); border-radius: var(--r); padding: .55rem .75rem; margin-top: .8rem; }
+.legal-domain .ld-sub { font-size: .85rem; color: var(--ink-faint); font-style: italic; margin-bottom: .5rem; }

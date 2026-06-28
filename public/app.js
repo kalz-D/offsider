@@ -52,6 +52,7 @@
   async function getConfig() { if (!State.config) State.config = await api('GET', '/config'); return State.config; }
   async function getLessons() { if (!State.lessons) State.lessons = await api('GET', '/lessons'); return State.lessons; }
   async function getAppKit() { if (!State.appKit) State.appKit = await api('GET', '/app-kit'); return State.appKit; }
+  async function getLegalRefs() { if (!State.legalRefs) State.legalRefs = await api('GET', '/legal-refs'); return State.legalRefs; }
 
   // ---- notifications (shared by managers + staff) ----
   function bellHtml() { return '<button class="bell" id="notifBell" title="Notifications">🔔<span class="notif-dot" id="notifDot" style="display:none"></span></button>'; }
@@ -141,6 +142,7 @@
       item('suggestions', '#/suggestions', '💡', 'Suggestions') +
       '<div class="nav-group-label">Learn</div>' +
       item('guide', '#/guide', '⚖️', 'Fair Work guide') +
+      item('legal', '#/legal', '📚', 'Legal backing') +
       '<div class="sidebar-foot"><div class="biz">' + esc(b.name) + '</div>' +
       '<div>' + esc(State.me.name) + ' · <a href="#" id="logout">Log out</a></div></div>' +
       '</aside>' +
@@ -1208,6 +1210,7 @@
 
     const content =
       '<div class="disclaimer-note" style="margin-bottom:1.6rem">⚠️ ' + esc(co.disclaimer || 'Offsider gives general good-practice guidance, not legal advice.') + '</div>' +
+      '<a href="#/legal" class="panel" style="display:flex;align-items:center;gap:.8rem;margin-bottom:1.6rem;text-decoration:none"><span style="font-size:1.6rem">📚</span><span class="grow"><strong>Want the law behind it?</strong><div class="muted" style="font-size:.9rem">See the sources and references each piece of guidance is based on.</div></span><span class="meta">Legal backing →</span></a>' +
       '<div class="section-title"><h3>' + esc(co.fairProcessTitle || 'What a fair process looks like') + '</h3></div>' +
       '<div class="grid" style="gap:1.2rem">' + fp + '</div>' +
       (co.smallBusinessCode ? '<div class="panel section-ink" style="margin-top:1.6rem;background:var(--brand);color:#eaf1f6"><h3 style="color:#fff">Small Business Fair Dismissal Code</h3><p style="margin:0;color:#cfe0ea">' + esc(co.smallBusinessCode) + '</p></div>' : '') +
@@ -1303,6 +1306,25 @@
       if (navigator.clipboard) navigator.clipboard.writeText(link);
       toast('Link copied — paste it into a text or email');
     };
+  }
+
+  // ---------------- LEGAL backing / references ----------------
+  async function viewLegal() {
+    const lr = await getLegalRefs();
+    const confBadge = (c) => c === 'high' ? '<span class="badge badge-positive">verified</span>' : (c === 'low' ? '<span class="badge badge-watchful">check source</span>' : '<span class="badge">general</span>');
+    const srcLink = (s) => s.url ? '<a href="' + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.name) + (s.citation ? ' — ' + esc(s.citation) : '') + ' ↗</a>' : '<span>' + esc(s.name) + (s.citation ? ' — ' + esc(s.citation) : '') + '</span>';
+    const domainCard = (d) => {
+      const prim = (d.primarySources || []).map((s) => '<a class="src-chip" href="' + esc(s.url || '#') + '" target="_blank" rel="noopener">' + esc(s.name) + ' ↗</a>').join('');
+      const refs = (d.references || []).map((r) => '<div class="legal-ref"><div class="lr-top"><strong>' + esc(r.topic) + '</strong> ' + confBadge(r.confidence) + '</div><div class="lr-claim">' + esc(r.claim) + '</div><div class="lr-basis">' + esc(r.basis) + '</div><div class="lr-src">' + (r.sources || []).map((s) => '<div>📎 ' + srcLink(s) + '</div>').join('') + '</div>' + (r.appArea ? '<div class="lr-app">↪ In Offsider: ' + esc(r.appArea) + '</div>' : '') + '</div>').join('');
+      return '<details class="legal-domain"><summary><span class="ld-title">' + (d.icon ? esc(d.icon) + ' ' : '') + esc(d.title) + '</span><span class="muted" style="font-size:.85rem">' + (d.references || []).length + ' refs</span></summary><div class="ld-body">' + (d.subtitle ? '<div class="ld-sub">' + esc(d.subtitle) + '</div>' : '') + '<p class="muted">' + esc(d.summary) + '</p>' + (prim ? '<div class="src-chips">' + prim + '</div>' : '') + refs + (d.verifierNotes ? '<div class="lr-note">✔︎ Fact-check: ' + esc(d.verifierNotes) + '</div>' : '') + '</div></details>';
+    };
+    const contacts = (lr.contacts || []).map((c) => '<a class="row" href="' + esc(c.url) + '" target="_blank" rel="noopener"><span class="ic-circle">🏛️</span><span class="grow"><span class="t">' + esc(c.name) + '</span><span class="s">' + esc(c.detail) + '</span></span><span class="meta">Visit ↗</span></a>').join('');
+    layout('legal', 'Legal backing',
+      '<div class="panel" style="margin-bottom:1.4rem"><strong>📚 The law behind the advice</strong><p class="muted" style="margin:.3rem 0 0">' + esc(lr.disclaimer || '') + '</p></div>' +
+      ((lr.domains && lr.domains.length)
+        ? '<div class="section-title"><h3>By area</h3><span class="muted" style="font-size:.85rem">' + lr.domains.length + ' areas · updated ' + esc(lr.updated || '') + '</span></div>' + lr.domains.map(domainCard).join('')
+        : '<div class="empty"><span class="ic">📚</span>Legal references are being compiled — check back shortly.</div>') +
+      '<div class="section-title" style="margin-top:1.8rem"><h3>Official sources &amp; help</h3></div><div class="row-list">' + contacts + '</div>');
   }
 
   // ---------------- MANAGER: productivity / leave / suggestions ----------------
@@ -1609,6 +1631,7 @@
       if (hash.indexOf('#/leave') === 0) return await viewLeave();
       if (hash.indexOf('#/suggestions') === 0) return await viewSuggestions();
       if (hash.indexOf('#/guide') === 0) return await viewGuide();
+      if (hash.indexOf('#/legal') === 0) return await viewLegal();
       return await viewDashboard();
     } catch (e) {
       if (/Not signed in/i.test(e.message)) { State.me = null; return viewAuth('login'); }
