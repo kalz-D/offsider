@@ -164,9 +164,10 @@ const RESUME_SCHEMA = {
     location: { type: 'string', description: 'Their suburb / city / state, or empty string.' },
     current_role: { type: 'string', description: 'Their most recent job title, or empty string.' },
     summary: { type: 'string', description: 'One plain-English sentence on who they are and their experience (max ~25 words).' },
-    skills: { type: 'array', items: { type: 'string' }, description: 'Up to 8 short skill, ticket or licence keywords.' }
+    skills: { type: 'array', items: { type: 'string' }, description: 'Up to 8 short skill, ticket or licence keywords.' },
+    questions: { type: 'array', items: { type: 'string' }, description: 'Exactly 5 interview questions tailored to THIS résumé — probe their actual experience, achievements, gaps and claims. Specific, not generic. Lawful only: about the work and their experience, never about age, race, health/disability, religion, relationships, pregnancy/family or other protected attributes.' }
   },
-  required: ['name', 'email', 'phone', 'location', 'current_role', 'summary', 'skills']
+  required: ['name', 'email', 'phone', 'location', 'current_role', 'summary', 'skills', 'questions']
 };
 // Build the user-message content for Claude from a stored résumé file (base64) — or fall back to text.
 async function resumeToContent(file, resumeText) {
@@ -193,12 +194,12 @@ async function extractResumeFields(file, resumeText) {
   if (!client) return { ok: false, reason: 'not_configured' };
   const blocks = await resumeToContent(file, resumeText);
   if (!blocks) return { ok: false, reason: 'no_resume' };
-  blocks.push({ type: 'text', text: "Extract this job applicant's contact and profile details from the résumé above." });
+  blocks.push({ type: 'text', text: "Extract this job applicant's contact and profile details from the résumé above, and write 5 interview questions tailored specifically to this person's résumé." });
   try {
     const resp = await client.messages.create({
       model: AI.model,
       max_tokens: 1024,
-      system: "You read a job applicant's résumé/CV and extract their details. Only use what is clearly present — never guess or invent a value; use an empty string when something is not stated. The name is the applicant's own, not a referee or an employer.",
+      system: "You read a job applicant's résumé/CV and extract their details. For the contact/profile fields, only use what is clearly present — never guess or invent a value; use an empty string when something is not stated, and the name is the applicant's own (not a referee or an employer). For the `questions` field you DO use judgement: write sharp, specific interview questions grounded in this candidate's actual experience and claims — and keep them lawful (about the work only, never about protected attributes).",
       messages: [{ role: 'user', content: blocks }],
       output_config: { format: { type: 'json_schema', schema: RESUME_SCHEMA } }
     });
@@ -240,7 +241,14 @@ async function aiFillCandidateFromResume(businessId, candidateId, opts) {
   if (looksLikeEmail(f.email) && (overwrite || !c.email)) { email = String(f.email).trim(); filled.push('email'); }
   if (String(f.phone || '').trim() && (overwrite || !c.phone)) { phone = String(f.phone).trim(); filled.push('phone'); }
   const notes = mergeResumeNote(c.resume_text, f);
-  await db.prepare('UPDATE candidates SET name=?, email=?, phone=?, resume_text=?, updated_at=? WHERE id=?').run(name, email, phone, notes, now(), candidateId);
+  // tailored interview questions → stored inside the interview JSON so they show in the interview section and persist
+  let interviewJson = c.interview;
+  if (Array.isArray(f.questions) && f.questions.length) {
+    const iv = safeParse(c.interview, {}) || {};
+    iv.aiQuestions = f.questions.map((q) => String(q || '').trim()).filter(Boolean).slice(0, 8);
+    interviewJson = JSON.stringify(iv);
+  }
+  await db.prepare('UPDATE candidates SET name=?, email=?, phone=?, resume_text=?, interview=?, updated_at=? WHERE id=?').run(name, email, phone, notes, interviewJson, now(), candidateId);
   return { ok: true, filled, fields: f };
 }
 

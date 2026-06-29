@@ -1046,6 +1046,12 @@
     const jobHtml = '<div class="iq-group"><div class="iq-cat">✅ Can they do the job? <span class="muted" style="font-weight:400">(always lawful — ask about the work)</span></div>' + jobG.map(qRow).join('') + '</div>';
     const dnaHtml = (kit.doNotAsk || []).map((d) => '<div class="dna-item"><div class="dna-topic">🚫 ' + esc(d.topic) + ' ' + refChip('recruitment', d.topic, d.topic) + '</div>' + (d.example ? '<div class="dna-eg">Avoid: ' + esc(d.example) + '</div>' : '') + '<div class="dna-why">' + esc(d.why) + '</div><div class="dna-instead">✅ Instead: ' + esc(d.insteadAsk) + '</div></div>').join('');
     const gutHtml = (kit.gutFeelPrompts || []).map((p, i) => '<div class="field"><label>' + esc(p) + '</label><textarea data-gut="G' + i + '" rows="2">' + esc(iv.gut['G' + i] || '') + '</textarea></div>').join('');
+    // ✨ AI-suggested interview questions, tailored to this résumé
+    const aiQs = Array.isArray(iv.aiQuestions) ? iv.aiQuestions : [];
+    const hasResume = (c.files || []).some((f) => f.kind === 'resume') || !!c.resume_text;
+    const aiQHtml = aiQs.length
+      ? '<div class="iq-group"><div class="iq-cat">✨ Tailored to their résumé <span class="muted" style="font-weight:400">(AI-suggested — your call which to ask)</span></div>' + aiQs.map((q, i) => qRow({ key: 'AIQ' + i, q: q, why: '' })).join('') + '</div>'
+      : (aiStatus.configured && hasResume ? '<div class="panel" style="margin:.2rem 0"><strong>✨ Want questions tailored to their résumé?</strong><div class="muted" style="font-size:.88rem;margin:.2rem 0 .5rem">The AI reads their résumé and suggests 5 sharp, specific questions to ask.</div><button class="btn btn-primary btn-sm" id="genQs">Suggest questions</button> <span id="genQsMsg" class="muted" style="font-size:.84rem"></span></div>' : '');
 
     // offer / hire actions
     const fn = c.name.split(' ')[0];
@@ -1088,7 +1094,7 @@
       actionHtml +
       '<div class="section-title" style="margin-top:1.8rem"><h3>🎤 Interview</h3><button class="btn btn-primary btn-sm" id="saveIv">Save interview</button></div>' +
       '<div class="guard-banner">🧭 <strong>Ask about the job, not the person.</strong> Tick what you asked and jot their answers — every question below is lawful to ask. ' + refChip('recruitment', 'protected attributes discrimination interview hiring', 'Lawful interview questions') + '</div>' +
-      lawfulHtml + jobHtml +
+      aiQHtml + lawfulHtml + jobHtml +
       '<details class="dna"><summary>⚠️ Questions you must NOT ask — and what to ask instead</summary><div class="dna-body">' + dnaHtml + '</div></details>' +
       refSection +
       '<div class="section-title" style="margin-top:1.4rem"><h3>🤔 Your read on them</h3></div>' + gutHtml +
@@ -1105,6 +1111,15 @@
     root().querySelectorAll('[data-note]').forEach((el) => { el.oninput = () => { iv.notes[el.getAttribute('data-note')] = el.value; }; });
     root().querySelectorAll('[data-gut]').forEach((el) => { el.oninput = () => { iv.gut[el.getAttribute('data-gut')] = el.value; }; });
     const tt = $('#tellThem'); if (tt) tt.oninput = () => { iv.tellThem = tt.value; };
+    const gq = $('#genQs'); if (gq) gq.onclick = async () => {
+      const m = $('#genQsMsg'); const t0 = gq.textContent; gq.disabled = true; gq.textContent = 'Reading…'; if (m) m.textContent = ' Reading their résumé…';
+      try {
+        const r = await api('POST', '/candidates/' + id + '/parse-resume', {});
+        if (r && r.ok) { toast('✨ Tailored questions added'); viewCandidate(id); return; }
+        gq.disabled = false; gq.textContent = t0;
+        if (m) m.innerHTML = '<span style="color:#c0392b"> ' + (r && r.reason === 'not_configured' ? 'AI isn’t switched on yet.' : r && r.reason === 'no_resume' ? 'No résumé to read.' : 'Couldn’t read it — try again.') + '</span>';
+      } catch (e) { gq.disabled = false; gq.textContent = t0; if (m) m.innerHTML = '<span style="color:#c0392b"> Something went wrong.</span>'; }
+    };
     $('#saveIv').onclick = async () => {
       const status = (c.status === 'new' || c.status === 'applied') ? 'interview' : c.status;
       await api('PATCH', '/candidates/' + id, { interview: iv, status });
