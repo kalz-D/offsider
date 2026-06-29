@@ -1,6 +1,6 @@
 // Minimal service worker — makes Offsider installable and keeps the shell snappy.
 // Network-first for everything; falls back to cache when offline so the app still opens.
-const CACHE = 'offsider-v24';
+const CACHE = 'offsider-v25';
 const SHELL = ['/app', '/app.js', '/styles.css', '/manifest.webmanifest', '/icon.svg'];
 
 self.addEventListener('install', (e) => {

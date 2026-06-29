@@ -154,7 +154,7 @@ const AI = { configured: !!process.env.ANTHROPIC_API_KEY, model: process.env.ANT
 let anthropicClient = null;
 function getAnthropic() {
   if (!AI.configured) return null;
-  if (!anthropicClient) { const Anthropic = require('@anthropic-ai/sdk'); anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }); }
+  if (!anthropicClient) { const Anthropic = require('@anthropic-ai/sdk'); anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, timeout: 60000, maxRetries: 1 }); }
   return anthropicClient;
 }
 const RESUME_SCHEMA = {

@@ -78,7 +78,7 @@
     openModal('<h2>Notifications</h2>' + (ns.some((n) => !n.read) ? '<button class="btn btn-ghost btn-sm" id="markAll" style="margin-bottom:.6rem">Mark all read</button>' : '') + '<div class="notif-list">' + list + '</div><div class="modal-foot"><button class="btn btn-ghost" id="nClose">Close</button></div>');
     $('#nClose').onclick = closeModal;
     const ma = $('#markAll'); if (ma) ma.onclick = async () => { await api('POST', '/notifications/read', {}); closeModal(); refreshNotifBadge(); };
-    root().querySelectorAll('.notif-item').forEach((a) => { a.onclick = async () => { await api('POST', '/notifications/read', { id: a.getAttribute('data-id') }); refreshNotifBadge(); }; });
+    document.querySelectorAll('.notif-item').forEach((a) => { a.onclick = async () => { await api('POST', '/notifications/read', { id: a.getAttribute('data-id') }); refreshNotifBadge(); }; });
   }
   const money = (n) => '$' + Number(n).toFixed(2);
   const ownerLabel = (o) => ({ manager: 'You', senior_manager: 'Senior mgr', buddy: 'Buddy', staff: 'Staff' }[o] || o);
@@ -602,7 +602,7 @@
     ).join('');
     openModal('<h2>Create a document</h2><p class="muted">Pick what you need — Offsider drafts it for you.</p>' + html + '<div class="modal-foot"><button class="btn btn-ghost" id="dpCancel">Cancel</button></div>');
     $('#dpCancel').onclick = closeModal;
-    root().querySelectorAll('.makedoc2').forEach((b) => { b.onclick = () => { closeModal(); openDocForm(c, b.getAttribute('data-doc'), undefined); }; });
+    document.querySelectorAll('.makedoc2').forEach((b) => { b.onclick = () => { closeModal(); openDocForm(c, b.getAttribute('data-doc'), undefined); }; });
   }
 
   async function viewDocument(id) {
@@ -1209,7 +1209,7 @@
     const qs = (refKit.questions || []).map((q, i) => '<div class="field"><label>' + esc(fill(q.question)) + '</label><textarea data-r="r' + i + '" rows="2">' + esc(ans['r' + i] || '') + '</textarea></div>').join('');
     openModal('<h2>Reference — ' + esc(r.referee_name || '') + '</h2><p class="muted">Jot their answers as you talk — saves to the candidate\'s file.</p>' + qs + '<div class="field"><label>Your notes</label><textarea id="refNotes" rows="2">' + esc(r.notes || '') + '</textarea></div><div class="modal-foot"><button class="btn btn-ghost" id="raCancel">Cancel</button><button class="btn btn-primary" id="raSave">Save reference</button></div>');
     $('#raCancel').onclick = closeModal;
-    $('#raSave').onclick = async () => { const a = {}; root().querySelectorAll('[data-r]').forEach((t) => { a[t.getAttribute('data-r')] = t.value; }); await api('PATCH', '/references/' + r.id, { answers: a, notes: $('#refNotes').value, status: 'received' }); closeModal(); toast('Reference saved'); viewCandidate(c.id); };
+    $('#raSave').onclick = async () => { const a = {}; document.querySelectorAll('[data-r]').forEach((t) => { a[t.getAttribute('data-r')] = t.value; }); await api('PATCH', '/references/' + r.id, { answers: a, notes: $('#refNotes').value, status: 'received' }); closeModal(); toast('Reference saved'); viewCandidate(c.id); };
   }
   function openRefEmail(r, refKit, c) {
     const data = { candidateName: c.name, roleTitle: c.role_applied || 'the role', businessName: State.me.business.name, managerName: State.me.name };
@@ -2213,7 +2213,7 @@
     const opts = ls.map((l) => '<button class="choice makelesson" data-l="' + l.id + '" style="margin-bottom:.4rem">' + esc(l.title) + '<span class="note">' + esc(l.blurb || '') + (l.competencyLabel ? ' · signs off: ' + esc(l.competencyLabel) : '') + '</span></button>').join('');
     openModal('<h2>Assign a lesson</h2><p class="muted">They\'ll get it in their portal to read and sit the quiz. Passing ticks the competency automatically.</p>' + opts + '<div class="modal-foot"><button class="btn btn-ghost" id="lCancel">Cancel</button></div>');
     $('#lCancel').onclick = closeModal;
-    root().querySelectorAll('.makelesson').forEach((b) => { b.onclick = async () => { await api('POST', '/employees/' + employeeId + '/lessons', { lesson_id: b.getAttribute('data-l') }); closeModal(); toast('Lesson assigned'); viewMember(employeeId); }; });
+    document.querySelectorAll('.makelesson').forEach((b) => { b.onclick = async () => { await api('POST', '/employees/' + employeeId + '/lessons', { lesson_id: b.getAttribute('data-l') }); closeModal(); toast('Lesson assigned'); viewMember(employeeId); }; });
   }
 
   // ---- worker app: log work ----
