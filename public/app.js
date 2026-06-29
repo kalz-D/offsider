@@ -144,6 +144,7 @@
       item('hiring', '#/hiring', '🧑‍💼', 'Hiring') +
       item('team', '#/team', '👷', 'Workers') +
       item('tasks', '#/tasks', '✅', 'Tasks') +
+      item('safety', '#/safety', '🦺', 'Safety') +
       item('onboarding', '#/onboarding', '👋', 'Onboarding') +
       item('cases', '#/cases', '🗂️', 'Cases') +
       item('docs', '#/documents', '📄', 'Documents') +
@@ -1547,11 +1548,12 @@
   }
   let calOffset = 0;
   async function viewCalendar() {
-    const [interviews, leave, tasks, lifecycle] = await Promise.all([
+    const [interviews, leave, tasks, lifecycle, comps] = await Promise.all([
       api('GET', '/interviews/upcoming').catch(() => []),
       api('GET', '/leave').catch(() => []),
       api('GET', '/tasks').catch(() => []),
-      api('GET', '/lifecycle').catch(() => [])
+      api('GET', '/lifecycle').catch(() => []),
+      api('GET', '/safety/competencies').catch(() => [])
     ]);
     const events = {};
     const dstr = (d) => { const x = new Date(d); if (isNaN(x)) return null; return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0'); };
@@ -1564,6 +1566,7 @@
       while (cur <= last && guard < 90) { add(dstr(cur), { icon: '🌴', label: (l.employee_name || 'Someone').split(' ')[0] + ' · ' + (l.leave_type || 'leave') + (l.status === 'pending' ? ' (pending)' : ''), link: '#/leave', cls: 'cal-leave' }); cur.setDate(cur.getDate() + 1); guard++; }
     });
     (lifecycle || []).forEach((m) => { if (m.daysUntil == null || m.daysUntil < -30 || m.daysUntil > 120) return; const dt = new Date(); dt.setHours(0, 0, 0, 0); dt.setDate(dt.getDate() + m.daysUntil); const fn = (m.employee_name || '').split(' ')[0]; add(dstr(dt), { icon: '👋', label: (m.title || 'Check-in').replace(/\{name\}/g, fn) + (fn ? ' · ' + fn : ''), link: m.employee_id ? '#/member/' + m.employee_id : '#/', cls: 'cal-moment' }); });
+    (comps || []).forEach((c) => { if (!c.expires) return; add(String(c.expires).slice(0, 10), { icon: '🎫', label: 'Expires · ' + ((c.employee_name || '').split(' ')[0]) + ' ' + c.name, link: '#/safety', cls: 'cal-cert' }); });
 
     const base = new Date(); base.setHours(0, 0, 0, 0); base.setDate(1); base.setMonth(base.getMonth() + calOffset);
     const y = base.getFullYear(), mo = base.getMonth();
@@ -1594,6 +1597,105 @@
     $('#calPrev').onclick = () => { calOffset--; viewCalendar(); };
     $('#calNext').onclick = () => { calOffset++; viewCalendar(); };
     const ct = $('#calToday'); if (ct) ct.onclick = () => { calOffset = 0; viewCalendar(); };
+  }
+  async function viewSafety() {
+    const [items, hazards, comps, employees, lib] = await Promise.all([
+      api('GET', '/safety/items').catch(() => []),
+      api('GET', '/safety/hazards').catch(() => []),
+      api('GET', '/safety/competencies').catch(() => []),
+      api('GET', '/employees').catch(() => []),
+      api('GET', '/safety/library').catch(() => ({ toolbox: [], policies: [], severities: [] }))
+    ]);
+    const talks = items.filter((i) => i.kind === 'toolbox');
+    const policies = items.filter((i) => i.kind === 'policy');
+    const today = todayStr();
+    const soonStr = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+    const itemRow = (it) => {
+      const done = it.total > 0 && it.signed >= it.total;
+      return '<div class="card card-pad" style="margin-bottom:.6rem"><div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start"><div class="grow"><strong>' + esc(it.title) + '</strong><div class="muted" style="font-size:.85rem;margin-top:.2rem">' + (it.total ? '<span class="badge ' + (done ? 'badge-positive' : '') + '">' + it.signed + '/' + it.total + ' signed</span>' : '<span class="muted">no workers yet</span>') + ' · ' + esc(fmtDate(it.created_at)) + '</div></div><div style="display:flex;flex-direction:column;gap:.35rem;flex:none"><button class="btn btn-ghost btn-sm si-review" data-id="' + it.id + '">Review</button><button class="btn btn-ghost btn-sm si-del" data-id="' + it.id + '">✕</button></div></div></div>';
+    };
+    const sevBadge = (s) => { if (!s) return ''; const c = (s === 'Critical' || s === 'High') ? 'badge-watchful' : (s === 'Medium' ? 'badge-proactive' : ''); return '<span class="badge ' + c + '">' + esc(s) + '</span>'; };
+    const hazRow = (hz) => '<div class="card card-pad" style="margin-bottom:.6rem"><div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start"><div class="grow"><strong>' + (hz.status === 'actioned' ? '<span style="opacity:.6">' + esc(hz.title) + '</span>' : esc(hz.title)) + '</strong> ' + sevBadge(hz.severity) + (hz.status === 'actioned' ? ' <span class="badge badge-positive">Sorted</span>' : '') + '<div class="muted" style="font-size:.85rem;margin-top:.2rem">' + [hz.location ? '📍 ' + esc(hz.location) : '', hz.reported_by_name ? 'by ' + esc(hz.reported_by_name) : '', esc(fmtDate(hz.created_at))].filter(Boolean).join(' · ') + '</div>' + (hz.detail ? '<div class="muted" style="font-size:.88rem;margin-top:.25rem">' + esc(hz.detail) + '</div>' : '') + (hz.action_note ? '<div class="muted" style="font-size:.85rem;margin-top:.25rem">✓ ' + esc(hz.action_note) + '</div>' : '') + '</div><div style="display:flex;flex-direction:column;gap:.35rem;flex:none">' + (hz.status !== 'actioned' ? '<button class="btn btn-primary btn-sm hz-action" data-id="' + hz.id + '">Mark sorted</button>' : '') + '<button class="btn btn-ghost btn-sm hz-del" data-id="' + hz.id + '">✕</button></div></div></div>';
+    const compRow = (c) => { const exp = c.expires; const overdue = exp && exp < today; const soon = exp && !overdue && exp <= soonStr; const flag = overdue ? '<span style="color:#c0392b;font-weight:700">⏰ expired ' + esc(fmtDate(exp)) + '</span>' : (soon ? '<span style="color:#9a5b00;font-weight:700">⏰ expires ' + esc(fmtDate(exp)) + '</span>' : (exp ? 'expires ' + esc(fmtDate(exp)) : 'no expiry set')); return '<div class="card card-pad" style="margin-bottom:.5rem"><div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start"><div class="grow"><strong>' + esc(c.name) + '</strong> <span class="muted">· ' + esc(c.employee_name) + '</span><div class="muted" style="font-size:.85rem;margin-top:.2rem">' + flag + (c.note ? ' · ' + esc(c.note) : '') + '</div></div><button class="btn btn-ghost btn-sm comp-del" data-id="' + c.id + '">✕</button></div></div>'; };
+
+    layout('safety', 'Safety',
+      '<div class="section-title"><h3>🗣️ Toolbox talks</h3><button class="btn btn-primary btn-sm" id="runTalk">+ Run a talk</button></div>' +
+      '<p class="muted" style="max-width:64ch;margin-top:-.3rem">Run a short safety chat — the crew reads it and signs on in their app, and you get a record of who\'s done it.</p>' +
+      (talks.length ? talks.map(itemRow).join('') : '<div class="muted">No talks yet — run your first one.</div>') +
+      '<div class="section-title" style="margin-top:1.8rem"><h3>📋 Policies & SWMS</h3><button class="btn btn-primary btn-sm" id="addPolicy">+ Add for sign-off</button></div>' +
+      (policies.length ? policies.map(itemRow).join('') : '<div class="muted">Push a policy or safe-work method statement for the crew to read and acknowledge.</div>') +
+      '<div class="section-title" style="margin-top:1.8rem"><h3>⚠️ Hazards & near-misses</h3><button class="btn btn-ghost btn-sm" id="logHazard">+ Log one</button></div>' +
+      (hazards.length ? hazards.map(hazRow).join('') : '<div class="muted">None reported. Workers can flag hazards from their app.</div>') +
+      '<div class="section-title" style="margin-top:1.8rem"><h3>🎫 Tickets & licences</h3><button class="btn btn-primary btn-sm" id="addComp">+ Add ticket</button></div>' +
+      '<p class="muted" style="max-width:64ch;margin-top:-.3rem">Track white cards, first aid, forklift, lab competencies — you\'ll get a heads-up before they lapse, and they show on the calendar.</p>' +
+      (comps.length ? comps.map(compRow).join('') : '<div class="muted">No tickets logged yet.</div>'));
+    $('#runTalk').onclick = () => openRunItem('toolbox', lib);
+    $('#addPolicy').onclick = () => openRunItem('policy', lib);
+    $('#logHazard').onclick = () => openHazardReport(lib, true);
+    $('#addComp').onclick = () => openAddCompetency(employees);
+    root().querySelectorAll('.si-review').forEach((b) => b.onclick = () => openItemDetail(b.getAttribute('data-id')));
+    root().querySelectorAll('.si-del').forEach((b) => b.onclick = async () => { await api('DELETE', '/safety/items/' + b.getAttribute('data-id')); viewSafety(); });
+    root().querySelectorAll('.hz-action').forEach((b) => b.onclick = () => openHazardAction(hazards.find((h) => h.id === b.getAttribute('data-id'))));
+    root().querySelectorAll('.hz-del').forEach((b) => b.onclick = async () => { await api('DELETE', '/safety/hazards/' + b.getAttribute('data-id')); viewSafety(); });
+    root().querySelectorAll('.comp-del').forEach((b) => b.onclick = async () => { await api('DELETE', '/safety/competencies/' + b.getAttribute('data-id')); viewSafety(); });
+  }
+  function openRunItem(kind, lib) {
+    const isPolicy = kind === 'policy';
+    const topics = isPolicy ? ((lib && lib.policies) || []) : ((lib && lib.toolbox) || []);
+    openModal('<h2>' + (isPolicy ? 'Add a policy / SWMS for sign-off' : 'Run a toolbox talk') + '</h2>' +
+      '<p class="muted">' + (isPolicy ? 'Pick a starter or paste your own — the crew reads it and signs on.' : 'Pick a topic or write your own. The crew reads it and signs on in their app.') + '</p>' +
+      (topics.length ? '<div class="alabel">Starters</div><div class="chip-grid" style="margin-bottom:.7rem">' + topics.map((t, i) => '<button type="button" class="log-chip topic-pick" data-i="' + i + '">' + esc(t.title) + '</button>').join('') + '</div>' : '') +
+      '<div class="field"><label>Title</label><input id="siTitle" placeholder="' + (isPolicy ? 'e.g. Drug &amp; alcohol policy' : 'e.g. Manual handling') + '"></div>' +
+      '<div class="field"><label>' + (isPolicy ? 'Policy / SWMS text' : 'Key points to cover') + '</label><textarea id="siBody" rows="6"></textarea></div>' +
+      '<div class="modal-foot"><button class="btn btn-ghost" id="siCancel">Cancel</button><button class="btn btn-primary" id="siSave">' + (isPolicy ? 'Send for sign-off' : 'Run it') + '</button></div>');
+    $('#siCancel').onclick = closeModal;
+    document.querySelectorAll('.topic-pick').forEach((b) => b.onclick = () => { const t = topics[+b.getAttribute('data-i')]; if (t) { $('#siTitle').value = t.title; $('#siBody').value = t.body; } });
+    $('#siSave').onclick = async () => { const title = $('#siTitle').value.trim(); if (!title) { toast('Give it a title', 'error'); return; } await api('POST', '/safety/items', { kind: kind, title: title, body: $('#siBody').value.trim() }); closeModal(); toast(isPolicy ? 'Sent for sign-off — crew notified' : 'Talk is live — crew notified'); viewSafety(); };
+  }
+  async function openItemDetail(id) {
+    const it = await api('GET', '/safety/items/' + id);
+    const signed = (it.signons || []).map((s) => '<div class="row" style="cursor:default"><span class="ic-circle" style="background:var(--positive-50)">✓</span><span class="grow"><span class="t">' + esc(s.name || 'Someone') + '</span><span class="s">' + esc(fmtDateTime(s.signed_at)) + (s.comment ? ' · “' + esc(s.comment) + '”' : '') + '</span></span></div>').join('');
+    const out = (it.outstanding || []).map((n) => '<span class="ticket-chip">' + esc(n) + '</span>').join(' ');
+    openModal('<h2>' + esc(it.title) + '</h2>' + (it.body ? '<div class="muted" style="white-space:pre-wrap;line-height:1.5;margin-bottom:1rem">' + esc(it.body) + '</div>' : '') +
+      '<div class="alabel">Signed on (' + (it.signons || []).length + ')</div>' + (signed || '<div class="muted">No one yet.</div>') +
+      (out ? '<div class="alabel" style="margin-top:1rem">Still to sign</div><div>' + out + '</div>' : '<div class="muted" style="margin-top:1rem">Everyone\'s signed ✅</div>') +
+      '<div class="modal-foot"><button class="btn btn-ghost" id="idClose">Close</button></div>');
+    $('#idClose').onclick = closeModal;
+  }
+  function openHazardAction(hz) {
+    if (!hz) return;
+    openModal('<h2>Sort: ' + esc(hz.title) + '</h2><div class="field"><label>What did you do about it? (optional)</label><textarea id="hzNote" rows="3">' + esc(hz.action_note || '') + '</textarea></div><div class="modal-foot"><button class="btn btn-ghost" id="hzCancel">Cancel</button><button class="btn btn-primary" id="hzSave">✓ Mark sorted</button></div>');
+    $('#hzCancel').onclick = closeModal;
+    $('#hzSave').onclick = async () => { await api('PATCH', '/safety/hazards/' + hz.id, { status: 'actioned', action_note: $('#hzNote').value.trim() }); closeModal(); toast('Sorted ✓'); viewSafety(); };
+  }
+  function openHazardReport(lib, isManager) {
+    const sevs = (lib && lib.severities) || ['Low', 'Medium', 'High', 'Critical'];
+    openModal('<h2>Report a hazard</h2><p class="muted">' + esc((lib && lib.hazardIntro) || 'Flag anything unsafe — quick is fine, we\'ll follow up.') + '</p>' +
+      '<div class="field"><label>What\'s the hazard?</label><input id="hzTitle" placeholder="e.g. Cracked floor tile by the bench"></div>' +
+      '<div class="grid grid-2"><div class="field"><label>Where</label><input id="hzLoc" placeholder="e.g. Sample prep room"></div><div class="field"><label>How serious</label><select id="hzSev"><option value="">—</option>' + sevs.map((s) => '<option>' + esc(s) + '</option>').join('') + '</select></div></div>' +
+      '<div class="field"><label>Details (optional)</label><textarea id="hzDetail" rows="2"></textarea></div>' +
+      '<div class="modal-foot"><button class="btn btn-ghost" id="hrCancel">Cancel</button><button class="btn btn-primary" id="hrSave">Report it</button></div>');
+    $('#hrCancel').onclick = closeModal;
+    $('#hrSave').onclick = async () => { const title = $('#hzTitle').value.trim(); if (!title) { toast('What\'s the hazard?', 'error'); return; } await api('POST', '/safety/hazards', { title: title, location: $('#hzLoc').value.trim(), severity: $('#hzSev').value, detail: $('#hzDetail').value.trim() }); closeModal(); toast('Reported — thanks 👍'); if (isManager) viewSafety(); else viewStaffHome(); };
+  }
+  function openAddCompetency(employees) {
+    const opts = (employees || []).map((e) => '<option value="' + e.id + '">' + esc(e.name) + '</option>').join('');
+    if (!opts) { toast('Add a worker first', 'error'); return; }
+    openModal('<h2>Add a ticket / licence</h2><div class="field"><label>Worker</label><select id="cpEmp">' + opts + '</select></div>' +
+      '<div class="field"><label>Ticket / licence / competency</label><input id="cpName" placeholder="e.g. White card, First aid, Forklift LF"></div>' +
+      '<div class="grid grid-2"><div class="field"><label>Issued (optional)</label><input type="date" id="cpIssued"></div><div class="field"><label>Expires</label><input type="date" id="cpExp"></div></div>' +
+      '<div class="field"><label>Note (optional)</label><input id="cpNote"></div>' +
+      '<div class="modal-foot"><button class="btn btn-ghost" id="cpCancel">Cancel</button><button class="btn btn-primary" id="cpSave">Add</button></div>');
+    $('#cpCancel').onclick = closeModal;
+    $('#cpSave').onclick = async () => { const name = $('#cpName').value.trim(); const emp = $('#cpEmp').value; if (!emp) { toast('Pick a worker', 'error'); return; } if (!name) { toast('Name the ticket', 'error'); return; } await api('POST', '/safety/competencies', { employee_id: emp, name: name, issued: $('#cpIssued').value || null, expires: $('#cpExp').value || null, note: $('#cpNote').value.trim() }); closeModal(); toast('Added'); viewSafety(); };
+  }
+  function openSignOn(item) {
+    if (!item) return;
+    openModal('<h2>' + (item.kind === 'policy' ? '📋 ' : '🗣️ ') + esc(item.title) + '</h2>' + (item.body ? '<div style="white-space:pre-wrap;line-height:1.55;margin-bottom:1rem">' + esc(item.body) + '</div>' : '') +
+      '<div class="field"><label>Comment or question (optional)</label><input id="soComment" placeholder="e.g. all good"></div>' +
+      '<div class="modal-foot"><button class="btn btn-ghost" id="soCancel">Close</button><button class="btn btn-primary" id="soSign">✓ I\'ve read this — sign on</button></div>');
+    $('#soCancel').onclick = closeModal;
+    $('#soSign').onclick = async () => { await api('POST', '/safety/items/' + item.id + '/sign', { comment: $('#soComment').value.trim() }); closeModal(); toast('Signed on ✓ thanks'); viewStaffHome(); };
   }
   async function viewCareer() {
     const bizIndustryId = State.me.business.industry_id;
@@ -1943,9 +2045,13 @@
   }
 
   async function viewStaffHome() {
-    const [me, assignments, myLessons, plans, staffTasks] = await Promise.all([api('GET', '/me'), api('GET', '/me/assignments'), api('GET', '/me/lessons'), api('GET', '/me/plans'), api('GET', '/tasks').catch(() => [])]);
+    const [me, assignments, myLessons, plans, staffTasks, safetyItems, safetyLib] = await Promise.all([api('GET', '/me'), api('GET', '/me/assignments'), api('GET', '/me/lessons'), api('GET', '/me/plans'), api('GET', '/tasks').catch(() => []), api('GET', '/me/safety').catch(() => []), api('GET', '/safety/library').catch(() => ({}))]);
     const myTasks = (staffTasks || []).filter((t) => t.status !== 'done');
     const tasksHtml = myTasks.length ? '<div class="section-title" style="margin-top:1.8rem"><h3>✅ Your tasks</h3></div><div class="row-list">' + myTasks.map((t) => '<div class="row" style="cursor:default"><span class="ic-circle">✅</span><span class="grow"><span class="t">' + esc(t.title) + '</span><span class="s">' + [t.about_name ? 'about ' + esc(t.about_name) : '', t.due ? 'due ' + fmtDate(t.due) : '', t.created_by_name ? 'from ' + esc(t.created_by_name) : ''].filter(Boolean).join(' · ') + '</span></span><button class="btn btn-primary btn-sm staff-task-done" data-id="' + t.id + '">✓ Done</button></div>').join('') + '</div>' : '';
+    const toSign = (safetyItems || []).filter((i) => !i.signed);
+    const safetyHtml = '<div class="section-title" style="margin-top:1.8rem"><h3>🦺 Safety</h3></div>' +
+      (toSign.length ? '<div class="row-list">' + toSign.map((it) => '<button type="button" class="row staff-sign" data-id="' + it.id + '"><span class="ic-circle">' + (it.kind === 'policy' ? '📋' : '🗣️') + '</span><span class="grow"><span class="t">' + esc(it.title) + '</span><span class="s">' + (it.kind === 'policy' ? 'Read & sign' : 'Toolbox talk — read & sign') + '</span></span><span class="meta">Sign →</span></button>').join('') + '</div>' : '<div class="card card-pad muted">Nothing to sign right now. 👍</div>') +
+      '<button class="btn btn-ghost btn-block" id="reportHazard" style="margin-top:.6rem">⚠️ Report a hazard</button>';
     const pending = assignments.filter((a) => !a.completed);
     const done = assignments.filter((a) => a.completed);
     const checkins = pending.length
@@ -1981,10 +2087,13 @@
       '<a href="#/log" class="cta-log">➕ Log today\'s work</a>' +
       '<div class="section-title" style="margin-top:1.4rem"><h3>📋 Your check-ins</h3>' + (done.length ? '<span class="muted" style="font-size:.85rem">' + done.length + ' done this period</span>' : '') + '</div>' + checkins +
       tasksHtml +
+      safetyHtml +
       (lessonsHtml ? '<div class="section-title" style="margin-top:1.8rem"><h3>📚 Your lessons</h3></div>' + lessonsHtml : '') +
       (pathCard ? '<div class="section-title" style="margin-top:1.8rem"><h3>Your career & pay</h3></div>' + pathCard : ''),
       'home');
     root().querySelectorAll('.staff-task-done').forEach((b) => b.onclick = async () => { await api('POST', '/tasks/' + b.getAttribute('data-id') + '/done', {}); toast('Nice — done ✓'); viewStaffHome(); });
+    root().querySelectorAll('.staff-sign').forEach((b) => b.onclick = () => openSignOn((safetyItems || []).find((i) => i.id === b.getAttribute('data-id'))));
+    const rh = $('#reportHazard'); if (rh) rh.onclick = () => openHazardReport(safetyLib, false);
   }
 
   async function viewStaffCheckin(id) {
@@ -2249,6 +2358,7 @@
       if (hash.indexOf('#/onboarding') === 0) return await viewOnboarding();
       if (hash.indexOf('#/tasks') === 0) return await viewTasks();
       if (hash.indexOf('#/calendar') === 0) return await viewCalendar();
+      if (hash.indexOf('#/safety') === 0) return await viewSafety();
       if (hash.indexOf('#/team') === 0) return await viewTeam();
       if (hash.indexOf('#/documents') === 0) return await viewDocuments();
       if (hash.indexOf('#/career') === 0) return await viewCareer();

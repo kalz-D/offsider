@@ -628,6 +628,7 @@ a.crisis-card:hover { border-color: var(--brand); text-decoration: none; transfo
 .cal-chip.cal-task { background: #e9f5ec; color: #1f7a3d; }
 .cal-chip.cal-leave { background: #fff2e0; color: #9a5b00; }
 .cal-chip.cal-moment { background: #efeafb; color: #5b46b3; }
+.cal-chip.cal-cert { background: #fdeaea; color: #b3261e; }
 .cal-more { font-size: .62rem; color: var(--ink-faint); padding-left: .2rem; }
 .cal-agenda-date { font-family: var(--font-head); font-weight: 800; font-size: .92rem; margin: .9rem 0 .35rem; color: var(--ink); }
 @media (max-width: 640px) {

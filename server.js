@@ -32,6 +32,7 @@ const allowanceKit = require('./content/allowances');
 const careersCopy = require('./content/careersCopy');
 const jobAdKit = require('./content/jobAdKit');
 const hrCoach = require('./content/hrCoach');
+const safetyKit = require('./content/safetyKit');
 const nodemailer = require('nodemailer');
 
 // Email sending is OFF until SMTP creds are set in the environment (SMTP_HOST/USER/PASS).
@@ -712,7 +713,17 @@ app.get('/api/cron/run', h(async (req, res) => {
   }
   let inbox = { skipped: true };
   if (INBOX.configured) { try { inbox = await pollMailbox({ limit: 25 }); } catch (e) { inbox = { ok: false, error: e.message }; } }
-  res.json({ ok: true, prefillSent, remindersSent, inbox });
+  // ticket/licence expiry reminders — anything expiring within 30 days (or already lapsed), once each
+  let certReminders = 0;
+  const today2 = new Date(nowMs).toISOString().slice(0, 10);
+  const soon = new Date(nowMs + 30 * 86400000).toISOString().slice(0, 10);
+  const certs = await db.prepare("SELECT c.*, e.name AS employee_name FROM competencies c JOIN employees e ON e.id=c.employee_id WHERE c.expires IS NOT NULL AND c.expires <= ? AND c.reminded_at IS NULL").all(soon);
+  for (const c of certs) {
+    await notifyManagers(c.business_id, 'safety', '🎫 ' + (c.employee_name || 'A worker') + '’s ' + c.name + (c.expires < today2 ? ' has expired' : ' expires soon'), 'Expiry: ' + c.expires, '#/safety', null);
+    await db.prepare('UPDATE competencies SET reminded_at=? WHERE id=?').run(now(), c.id);
+    certReminders++;
+  }
+  res.json({ ok: true, prefillSent, remindersSent, inbox, certReminders });
 }));
 
 // ---------- everything below requires a login ----------
@@ -953,6 +964,107 @@ app.post('/api/tasks/:id/done', h(async (req, res) => {
 }));
 app.delete('/api/tasks/:id', h(async (req, res) => {
   await db.prepare('DELETE FROM tasks WHERE id=? AND business_id=?').run(req.params.id, req.business.id);
+  res.json({ ok: true });
+}));
+
+// ---------- Health & Safety: toolbox talks + policy sign-on, hazards, tickets/licences ----------
+app.get('/api/safety/library', h(async (req, res) => res.json({ toolbox: safetyKit.toolboxLibrary, policies: safetyKit.policyStarters, severities: safetyKit.severities, hazardIntro: safetyKit.hazardIntro })));
+// toolbox talks + policies (shared "items" — kind distinguishes); each is signed on by the crew
+app.get('/api/safety/items', h(async (req, res) => {
+  const kind = req.query.kind;
+  const rows = kind
+    ? await db.prepare("SELECT * FROM safety_items WHERE business_id=? AND kind=? AND status='active' ORDER BY created_at DESC").all(req.business.id, kind)
+    : await db.prepare("SELECT * FROM safety_items WHERE business_id=? AND status='active' ORDER BY created_at DESC").all(req.business.id);
+  const total = (await db.prepare("SELECT COUNT(*) c FROM employees WHERE business_id=? AND status='active'").get(req.business.id)).c;
+  const out = [];
+  for (const it of rows) {
+    const signed = (await db.prepare('SELECT COUNT(*) c FROM safety_signons WHERE item_id=?').get(it.id)).c;
+    out.push({ id: it.id, kind: it.kind, title: it.title, body: it.body, created_at: it.created_at, signed: signed, total: total });
+  }
+  res.json(out);
+}));
+app.get('/api/safety/items/:id', h(async (req, res) => {
+  const it = await db.prepare('SELECT * FROM safety_items WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!it) return res.status(404).json({ error: 'Not found' });
+  const signons = await db.prepare('SELECT * FROM safety_signons WHERE item_id=? ORDER BY signed_at').all(it.id);
+  const signedIds = new Set(signons.map((s) => s.employee_id).filter(Boolean));
+  const emps = await db.prepare("SELECT id, name FROM employees WHERE business_id=? AND status='active' ORDER BY name").all(req.business.id);
+  res.json(Object.assign({}, it, { signons: signons.map((s) => ({ name: s.signed_name, comment: s.comment, signed_at: s.signed_at })), outstanding: emps.filter((e) => !signedIds.has(e.id)).map((e) => e.name) }));
+}));
+app.post('/api/safety/items', h(async (req, res) => {
+  const b = req.body || {};
+  if (!b.title || !String(b.title).trim()) return res.status(400).json({ error: 'Give it a title.' });
+  const kind = b.kind === 'policy' ? 'policy' : 'toolbox';
+  const id = uid();
+  await db.prepare('INSERT INTO safety_items (id, business_id, kind, title, body, created_by, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)')
+    .run(id, req.business.id, kind, String(b.title).trim(), b.body || null, req.user.id, 'active', now(), now());
+  const staff = await db.prepare("SELECT id FROM users WHERE business_id=? AND role='staff'").all(req.business.id);
+  for (const s of staff) await notify(req.business.id, s.id, 'safety', (kind === 'policy' ? 'Please read & sign: ' : 'New toolbox talk: ') + String(b.title).trim(), 'Open your home screen to read it and sign on.', '#/');
+  res.json({ id });
+}));
+app.delete('/api/safety/items/:id', h(async (req, res) => {
+  await db.prepare('DELETE FROM safety_items WHERE id=? AND business_id=?').run(req.params.id, req.business.id);
+  await db.prepare('DELETE FROM safety_signons WHERE item_id=?').run(req.params.id);
+  res.json({ ok: true });
+}));
+app.post('/api/safety/items/:id/sign', h(async (req, res) => {
+  const it = await db.prepare('SELECT * FROM safety_items WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!it) return res.status(404).json({ error: 'Not found' });
+  const emp = await myEmployee(req); const empId = emp ? emp.id : (req.user.employee_id || null);
+  if (empId) { const ex = await db.prepare('SELECT id FROM safety_signons WHERE item_id=? AND employee_id=?').get(it.id, empId); if (ex) return res.json({ ok: true, already: true }); }
+  await db.prepare('INSERT INTO safety_signons (id, business_id, item_id, employee_id, signed_name, comment, signed_at) VALUES (?,?,?,?,?,?,?)')
+    .run(uid(), req.business.id, it.id, empId, req.user.name, (req.body && req.body.comment) || null, now());
+  await notifyManagers(req.business.id, 'safety', 'Signed: ' + it.title, (req.user.name || 'A worker') + ' signed on' + (req.body && req.body.comment ? ' — “' + req.body.comment + '”' : ''), '#/safety', null);
+  res.json({ ok: true });
+}));
+// what the logged-in worker still needs to read & sign
+app.get('/api/me/safety', h(async (req, res) => {
+  const emp = await myEmployee(req); const empId = emp ? emp.id : (req.user.employee_id || null);
+  const items = await db.prepare("SELECT * FROM safety_items WHERE business_id=? AND status='active' ORDER BY created_at DESC").all(req.business.id);
+  const signed = empId ? new Set((await db.prepare('SELECT item_id FROM safety_signons WHERE employee_id=?').all(empId)).map((r) => r.item_id)) : new Set();
+  res.json(items.map((it) => ({ id: it.id, kind: it.kind, title: it.title, body: it.body, signed: signed.has(it.id) })));
+}));
+// hazards / near-misses
+app.get('/api/safety/hazards', h(async (req, res) => {
+  res.json(await db.prepare("SELECT * FROM hazards WHERE business_id=? ORDER BY (status='actioned'), created_at DESC").all(req.business.id));
+}));
+app.post('/api/safety/hazards', h(async (req, res) => {
+  const b = req.body || {};
+  if (!b.title || !String(b.title).trim()) return res.status(400).json({ error: 'What’s the hazard?' });
+  const emp = await myEmployee(req);
+  const id = uid();
+  await db.prepare('INSERT INTO hazards (id, business_id, title, location, severity, detail, reported_by_employee_id, reported_by_name, status, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+    .run(id, req.business.id, String(b.title).trim(), b.location || null, b.severity || null, b.detail || null, emp ? emp.id : null, req.user.name, 'open', now());
+  await notifyManagers(req.business.id, 'safety', '⚠️ Hazard reported — ' + String(b.title).trim(), (req.user.name || 'Someone') + (b.location ? ' · ' + b.location : '') + (b.severity ? ' · ' + b.severity : ''), '#/safety', null);
+  res.json({ id });
+}));
+app.patch('/api/safety/hazards/:id', h(async (req, res) => {
+  const hz = await db.prepare('SELECT * FROM hazards WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!hz) return res.status(404).json({ error: 'Not found' });
+  const b = req.body || {};
+  const status = b.status || hz.status;
+  await db.prepare('UPDATE hazards SET status=?, action_note=?, actioned_by=?, actioned_at=? WHERE id=?')
+    .run(status, b.action_note != null ? b.action_note : hz.action_note, status === 'actioned' ? req.user.name : hz.actioned_by, status === 'actioned' ? now() : hz.actioned_at, hz.id);
+  res.json({ ok: true });
+}));
+app.delete('/api/safety/hazards/:id', h(async (req, res) => {
+  await db.prepare('DELETE FROM hazards WHERE id=? AND business_id=?').run(req.params.id, req.business.id);
+  res.json({ ok: true });
+}));
+// tickets, licences & competencies (with expiry)
+app.get('/api/safety/competencies', h(async (req, res) => {
+  res.json(await db.prepare("SELECT c.*, e.name AS employee_name FROM competencies c JOIN employees e ON e.id=c.employee_id WHERE c.business_id=? ORDER BY COALESCE(c.expires,'9999-12-31')").all(req.business.id));
+}));
+app.post('/api/safety/competencies', h(async (req, res) => {
+  const b = req.body || {};
+  if (!b.employee_id || !b.name || !String(b.name).trim()) return res.status(400).json({ error: 'Pick a worker and name the ticket.' });
+  const id = uid();
+  await db.prepare('INSERT INTO competencies (id, business_id, employee_id, name, issued, expires, note, created_at) VALUES (?,?,?,?,?,?,?,?)')
+    .run(id, req.business.id, b.employee_id, String(b.name).trim(), b.issued || null, b.expires || null, b.note || null, now());
+  res.json({ id });
+}));
+app.delete('/api/safety/competencies/:id', h(async (req, res) => {
+  await db.prepare('DELETE FROM competencies WHERE id=? AND business_id=?').run(req.params.id, req.business.id);
   res.json({ ok: true });
 }));
 

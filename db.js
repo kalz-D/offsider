@@ -147,6 +147,29 @@ const SCHEMA_SQL = `
   );
   CREATE INDEX IF NOT EXISTS idx_tasks_biz ON tasks(business_id);
   CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee_user_id);
+  CREATE TABLE IF NOT EXISTS safety_items (
+    id TEXT PRIMARY KEY, business_id TEXT NOT NULL, kind TEXT DEFAULT 'toolbox',
+    title TEXT NOT NULL, body TEXT, created_by TEXT, status TEXT DEFAULT 'active',
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS safety_signons (
+    id TEXT PRIMARY KEY, business_id TEXT NOT NULL, item_id TEXT NOT NULL,
+    employee_id TEXT, signed_name TEXT, comment TEXT, signed_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS hazards (
+    id TEXT PRIMARY KEY, business_id TEXT NOT NULL, title TEXT NOT NULL, location TEXT,
+    severity TEXT, detail TEXT, reported_by_employee_id TEXT, reported_by_name TEXT,
+    status TEXT DEFAULT 'open', action_note TEXT, actioned_by TEXT, actioned_at TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS competencies (
+    id TEXT PRIMARY KEY, business_id TEXT NOT NULL, employee_id TEXT NOT NULL,
+    name TEXT NOT NULL, issued TEXT, expires TEXT, note TEXT,
+    reminded_at TEXT, created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_signons_item ON safety_signons(item_id);
+  CREATE INDEX IF NOT EXISTS idx_hazards_biz ON hazards(business_id);
+  CREATE INDEX IF NOT EXISTS idx_comp_biz ON competencies(business_id);
   CREATE TABLE IF NOT EXISTS academy_progress (
     id TEXT PRIMARY KEY, business_id TEXT NOT NULL, user_id TEXT NOT NULL, lesson_id TEXT NOT NULL, completed_at TEXT NOT NULL
   );
