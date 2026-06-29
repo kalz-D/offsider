@@ -139,6 +139,14 @@ const SCHEMA_SQL = `
     id TEXT PRIMARY KEY, business_id TEXT NOT NULL, user_id TEXT NOT NULL, kind TEXT,
     title TEXT, body TEXT, link TEXT, read INTEGER DEFAULT 0, created_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY, business_id TEXT NOT NULL, title TEXT NOT NULL, detail TEXT,
+    about_employee_id TEXT, assignee_user_id TEXT, created_by TEXT, due TEXT,
+    status TEXT DEFAULT 'open', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    done_at TEXT, done_by TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_tasks_biz ON tasks(business_id);
+  CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee_user_id);
   CREATE TABLE IF NOT EXISTS academy_progress (
     id TEXT PRIMARY KEY, business_id TEXT NOT NULL, user_id TEXT NOT NULL, lesson_id TEXT NOT NULL, completed_at TEXT NOT NULL
   );

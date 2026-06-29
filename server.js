@@ -894,6 +894,68 @@ app.post('/api/notifications/read', h(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// ---------- tasks (delegate a job — e.g. "check in with the new starter" — to whoever's responsible) ----------
+// people you can assign a task to (anyone with a login in the business)
+app.get('/api/users', h(async (req, res) => {
+  const rows = await db.prepare('SELECT id, name, role FROM users WHERE business_id = ? ORDER BY name').all(req.business.id);
+  res.json(rows);
+}));
+async function taskView(t, meId) {
+  const assignee = t.assignee_user_id ? await db.prepare('SELECT name FROM users WHERE id = ?').get(t.assignee_user_id) : null;
+  const about = t.about_employee_id ? await db.prepare('SELECT name FROM employees WHERE id = ?').get(t.about_employee_id) : null;
+  const creator = t.created_by ? await db.prepare('SELECT name FROM users WHERE id = ?').get(t.created_by) : null;
+  return {
+    id: t.id, title: t.title, detail: t.detail, due: t.due, status: t.status,
+    about_employee_id: t.about_employee_id, about_name: about ? about.name : null,
+    assignee_user_id: t.assignee_user_id, assignee_name: assignee ? assignee.name : null,
+    created_by: t.created_by, created_by_name: creator ? creator.name : null,
+    mine: t.assignee_user_id === meId, created_at: t.created_at, done_at: t.done_at
+  };
+}
+app.get('/api/tasks', h(async (req, res) => {
+  const manager = req.user.role === 'owner' || req.user.role === 'manager';
+  const rows = manager
+    ? await db.prepare("SELECT * FROM tasks WHERE business_id = ? ORDER BY (status='done'), COALESCE(due,'9999'), created_at DESC").all(req.business.id)
+    : await db.prepare("SELECT * FROM tasks WHERE business_id = ? AND assignee_user_id = ? ORDER BY (status='done'), COALESCE(due,'9999'), created_at DESC").all(req.business.id, req.user.id);
+  res.json(await Promise.all(rows.map((t) => taskView(t, req.user.id))));
+}));
+app.post('/api/tasks', h(async (req, res) => {
+  const b = req.body || {};
+  if (!b.title || !String(b.title).trim()) return res.status(400).json({ error: 'Give the task a title.' });
+  const id = uid();
+  const assignee = b.assignee_user_id || req.user.id; // default to self if unassigned
+  await db.prepare('INSERT INTO tasks (id, business_id, title, detail, about_employee_id, assignee_user_id, created_by, due, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+    .run(id, req.business.id, String(b.title).trim(), b.detail || null, b.about_employee_id || null, assignee, req.user.id, b.due || null, 'open', now(), now());
+  if (assignee && assignee !== req.user.id) await notify(req.business.id, assignee, 'task', 'New task from ' + req.user.name, String(b.title).trim(), '#/tasks');
+  res.json({ id });
+}));
+app.patch('/api/tasks/:id', h(async (req, res) => {
+  const t = await db.prepare('SELECT * FROM tasks WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!t) return res.status(404).json({ error: 'Not found' });
+  const b = req.body || {};
+  const pick = (k) => (b[k] !== undefined ? b[k] : t[k]);
+  const newAssignee = b.assignee_user_id !== undefined ? b.assignee_user_id : t.assignee_user_id;
+  await db.prepare('UPDATE tasks SET title=?, detail=?, about_employee_id=?, assignee_user_id=?, due=?, updated_at=? WHERE id=?')
+    .run(String(pick('title') || t.title).trim(), pick('detail'), pick('about_employee_id'), newAssignee, pick('due'), now(), t.id);
+  if (newAssignee && newAssignee !== t.assignee_user_id && newAssignee !== req.user.id) {
+    await notify(req.business.id, newAssignee, 'task', (req.user.name || 'A manager') + ' pushed you a task', String(pick('title') || t.title).trim(), '#/tasks');
+  }
+  res.json({ ok: true });
+}));
+app.post('/api/tasks/:id/done', h(async (req, res) => {
+  const t = await db.prepare('SELECT * FROM tasks WHERE id=? AND business_id=?').get(req.params.id, req.business.id);
+  if (!t) return res.status(404).json({ error: 'Not found' });
+  const reopen = !!(req.body && req.body.reopen);
+  await db.prepare('UPDATE tasks SET status=?, done_at=?, done_by=?, updated_at=? WHERE id=?')
+    .run(reopen ? 'open' : 'done', reopen ? null : now(), reopen ? null : req.user.id, now(), t.id);
+  if (!reopen && t.created_by && t.created_by !== req.user.id) await notify(req.business.id, t.created_by, 'task', 'Task done — ' + (t.title || ''), (req.user.name || 'Someone') + ' marked it complete', '#/tasks');
+  res.json({ ok: true });
+}));
+app.delete('/api/tasks/:id', h(async (req, res) => {
+  await db.prepare('DELETE FROM tasks WHERE id=? AND business_id=?').run(req.params.id, req.business.id);
+  res.json({ ok: true });
+}));
+
 // ---------- STAFF worker-app: plans, work log, leave, suggestions, training ----------
 app.get('/api/me/plans', h(async (req, res) => {
   const e = await myEmployee(req); if (!e) return res.json([]);

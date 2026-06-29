@@ -142,6 +142,7 @@
       '<div class="nav-group-label">Manage</div>' +
       item('hiring', '#/hiring', '🧑‍💼', 'Hiring') +
       item('team', '#/team', '👷', 'Workers') +
+      item('tasks', '#/tasks', '✅', 'Tasks') +
       item('onboarding', '#/onboarding', '👋', 'Onboarding') +
       item('cases', '#/cases', '🗂️', 'Cases') +
       item('docs', '#/documents', '📄', 'Documents') +
@@ -227,9 +228,9 @@
   // ---------------- dashboard ----------------
   function gentleDue(dd) { if (dd <= -8) return 'whenever you get a sec'; if (dd < 0) return 'a bit overdue'; if (dd === 0) return 'today'; if (dd <= 2) return 'in a day or two'; return 'soon'; }
   async function viewDashboard() {
-    const [d, coach, upcoming, leave, suggestions, onboarding, interviews, hrc] = await Promise.all([
+    const [d, coach, upcoming, leave, suggestions, onboarding, interviews, hrc, tasks] = await Promise.all([
       api('GET', '/dashboard'), api('GET', '/coach'), api('GET', '/lifecycle'),
-      api('GET', '/leave').catch(() => []), api('GET', '/suggestions').catch(() => []), api('GET', '/onboarding').catch(() => []), api('GET', '/interviews/upcoming').catch(() => []), api('GET', '/hr-coach').catch(() => null)
+      api('GET', '/leave').catch(() => []), api('GET', '/suggestions').catch(() => []), api('GET', '/onboarding').catch(() => []), api('GET', '/interviews/upcoming').catch(() => []), api('GET', '/hr-coach').catch(() => null), api('GET', '/tasks').catch(() => [])
     ]);
     const s = d.stats;
     const firstName = State.me.name.split(' ')[0];
@@ -245,6 +246,8 @@
     pendingLeave.forEach((l) => actions.push({ icon: '🌴', urgency: 2, title: esc((l.employee_name || 'Someone').split(' ')[0]) + ' wants some time off', hint: 'tap to sort it', link: '#/leave', urgent: true }));
     dueMoments.forEach((m) => { const fn = (m.employee_name || '').split(' ')[0]; actions.push({ icon: '👋', urgency: m.daysUntil < -14 ? 2 : 1, title: esc(fn) + ' — ' + esc(m.title.replace(/\{name\}/g, fn).toLowerCase()), hint: gentleDue(m.daysUntil), link: '#/member/' + m.employee_id, urgent: false }); });
     newSuggestions.forEach((x) => actions.push({ icon: '💡', urgency: 1, title: (x.anonymous ? 'Someone' : esc((x.employee_name || 'Someone').split(' ')[0])) + ' shared an idea', hint: 'have a read', link: '#/suggestions', urgent: false }));
+    const myOpenTasks = (tasks || []).filter((t) => t.mine && t.status !== 'done');
+    myOpenTasks.forEach((t) => { const overdue = t.due && t.due < todayStr(); actions.push({ icon: '✅', urgency: overdue ? 3 : 2, title: 'Task — ' + esc(t.title), hint: t.about_name ? 'about ' + esc(t.about_name) : (t.due ? (overdue ? 'overdue' : 'due ' + fmtDate(t.due)) : 'tap to do it'), link: '#/tasks', urgent: !!overdue }); });
     actions.sort((a, b) => b.urgency - a.urgency);
     const top = actions.slice(0, 3);
     const more = actions.length - top.length;
@@ -264,6 +267,7 @@
     const chip = (href, n, label, alert) => '<a href="' + href + '" class="navchip' + (alert ? ' alert' : '') + '"><strong>' + n + '</strong>' + label + '</a>';
     const strip = '<div class="navchips">' +
       chip('#/team', s.employees, 'workers') +
+      chip('#/tasks', myOpenTasks.length, 'tasks', myOpenTasks.some((t) => t.due && t.due < todayStr())) +
       chip('#/onboarding', (onboarding || []).length, 'onboarding') +
       chip('#/leave', pendingLeave.length, 'leave', pendingLeave.length > 0) +
       chip('#/suggestions', newSuggestions.length, 'ideas', newSuggestions.length > 0) +
@@ -1483,6 +1487,62 @@
   }
 
   // ---------------- career paths ----------------
+  async function viewTasks() {
+    const [tasks, users, employees] = await Promise.all([api('GET', '/tasks'), api('GET', '/users').catch(() => []), api('GET', '/employees').catch(() => [])]);
+    const open = tasks.filter((t) => t.status !== 'done');
+    const done = tasks.filter((t) => t.status === 'done');
+    const mineOpen = open.filter((t) => t.mine);
+    const otherOpen = open.filter((t) => !t.mine);
+    const row = (t) => {
+      const overdue = t.due && t.status !== 'done' && t.due < todayStr();
+      const meta = [t.about_name ? '👤 ' + esc(t.about_name) : '', (!t.mine && t.assignee_name) ? '→ ' + esc(t.assignee_name) : '', t.due ? (overdue ? '<span style="color:#c0392b">⏰ ' + esc(fmtDate(t.due)) + '</span>' : '⏰ ' + esc(fmtDate(t.due))) : ''].filter(Boolean).join(' &nbsp;·&nbsp; ');
+      return '<div class="card card-pad" style="margin-bottom:.6rem"><div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start"><div class="grow"><strong>' + (t.status === 'done' ? '<span style="text-decoration:line-through;opacity:.6">' + esc(t.title) + '</span>' : esc(t.title)) + '</strong>' + (t.detail ? '<div class="muted" style="font-size:.88rem;margin-top:.2rem">' + esc(t.detail) + '</div>' : '') + (meta ? '<div class="muted" style="font-size:.84rem;margin-top:.25rem">' + meta + '</div>' : '') + (t.created_by_name && !t.mine ? '' : (t.created_by_name && t.created_by !== State.me.id ? '<div class="muted" style="font-size:.8rem;margin-top:.15rem">from ' + esc(t.created_by_name) + '</div>' : '')) + '</div>' +
+        '<div style="display:flex;flex-direction:column;gap:.35rem;flex:none">' +
+        (t.status === 'done'
+          ? '<button class="btn btn-ghost btn-sm task-reopen" data-id="' + t.id + '">↩ Reopen</button>'
+          : '<button class="btn btn-primary btn-sm task-done" data-id="' + t.id + '">✓ Done</button><button class="btn btn-ghost btn-sm task-push" data-id="' + t.id + '">↪ Push to…</button><button class="btn btn-ghost btn-sm task-edit" data-id="' + t.id + '">edit</button>') +
+        '<button class="btn btn-ghost btn-sm task-del" data-id="' + t.id + '">✕</button></div></div></div>';
+    };
+    const section = (label, list) => '<div class="section-title" style="margin-top:1.4rem"><h3>' + label + ' (' + list.length + ')</h3></div>' + (list.length ? list.map(row).join('') : '<div class="muted">Nothing here right now.</div>');
+    layout('tasks', 'Tasks',
+      '<div class="section-title"><h3>✅ Tasks</h3><button class="btn btn-primary btn-sm" id="newTask">+ New task</button></div>' +
+      '<p class="muted" style="max-width:64ch;margin-top:-.3rem">Delegate jobs — like checking in with a new starter — to whoever\'s responsible. They get a notification, tick it off, or push it on to someone else.</p>' +
+      section('Your tasks', mineOpen) +
+      (otherOpen.length ? section('Delegated to others', otherOpen) : '') +
+      (done.length ? '<details style="margin-top:1.2rem"><summary style="cursor:pointer;color:var(--ink-faint)">Done (' + done.length + ')</summary><div style="margin-top:.6rem">' + done.map(row).join('') + '</div></details>' : ''));
+    $('#newTask').onclick = () => openTaskModal(null, users, employees);
+    root().querySelectorAll('.task-done').forEach((b) => b.onclick = async () => { await api('POST', '/tasks/' + b.getAttribute('data-id') + '/done', {}); toast('Done ✓'); viewTasks(); });
+    root().querySelectorAll('.task-reopen').forEach((b) => b.onclick = async () => { await api('POST', '/tasks/' + b.getAttribute('data-id') + '/done', { reopen: true }); viewTasks(); });
+    root().querySelectorAll('.task-del').forEach((b) => b.onclick = async () => { await api('DELETE', '/tasks/' + b.getAttribute('data-id')); viewTasks(); });
+    root().querySelectorAll('.task-edit').forEach((b) => b.onclick = () => openTaskModal(tasks.find((t) => t.id === b.getAttribute('data-id')), users, employees));
+    root().querySelectorAll('.task-push').forEach((b) => b.onclick = () => openPushTo(b.getAttribute('data-id'), users));
+  }
+  function openTaskModal(task, users, employees) {
+    task = task || {};
+    const userOpts = (users || []).map((u) => '<option value="' + u.id + '"' + (task.assignee_user_id === u.id ? ' selected' : '') + '>' + esc(u.name) + (u.role && u.role !== 'manager' ? ' (' + esc(u.role) + ')' : '') + '</option>').join('');
+    const empOpts = '<option value="">— not about a specific worker —</option>' + (employees || []).map((e) => '<option value="' + e.id + '"' + (task.about_employee_id === e.id ? ' selected' : '') + '>' + esc(e.name) + '</option>').join('');
+    openModal('<h2>' + (task.id ? 'Edit task' : 'New task') + '</h2>' +
+      '<div class="field"><label>Task</label><input id="tkTitle" placeholder="e.g. Check in with the new starter" value="' + esc(task.title || '') + '"></div>' +
+      '<div class="field"><label>Details (optional)</label><textarea id="tkDetail" rows="2" placeholder="Anything they should know">' + esc(task.detail || '') + '</textarea></div>' +
+      '<div class="grid grid-2"><div class="field"><label>About which worker</label><select id="tkAbout">' + empOpts + '</select></div>' +
+      '<div class="field"><label>Due (optional)</label><input type="date" id="tkDue" value="' + esc(task.due || '') + '"></div></div>' +
+      '<div class="field"><label>Assign to</label><select id="tkAssignee">' + userOpts + '</select></div>' +
+      '<div class="modal-foot"><button class="btn btn-ghost" id="tkCancel">Cancel</button><button class="btn btn-primary" id="tkSave">' + (task.id ? 'Save' : 'Create &amp; assign') + '</button></div>');
+    $('#tkCancel').onclick = closeModal;
+    $('#tkSave').onclick = async () => {
+      const title = $('#tkTitle').value.trim(); if (!title) { toast('Give it a title', 'error'); return; }
+      const payload = { title: title, detail: $('#tkDetail').value.trim(), about_employee_id: $('#tkAbout').value || null, assignee_user_id: $('#tkAssignee').value || null, due: $('#tkDue').value || null };
+      if (task.id) await api('PATCH', '/tasks/' + task.id, payload); else await api('POST', '/tasks', payload);
+      closeModal(); toast(task.id ? 'Saved' : 'Task created'); viewTasks();
+    };
+  }
+  function openPushTo(id, users) {
+    openModal('<h2>Push this task to…</h2><p class="muted">They\'ll get a notification straight away.</p><div class="row-list">' +
+      (users || []).map((u) => '<button type="button" class="row push-pick" data-id="' + u.id + '" style="width:100%;text-align:left;cursor:pointer"><span class="ic-circle">👤</span><span class="grow"><span class="t">' + esc(u.name) + '</span>' + (u.role && u.role !== 'manager' ? '<span class="s">' + esc(u.role) + '</span>' : '') + '</span></button>').join('') +
+      '</div><div class="modal-foot"><button class="btn btn-ghost" id="puCancel">Cancel</button></div>');
+    $('#puCancel').onclick = closeModal;
+    document.querySelectorAll('.push-pick').forEach((b) => b.onclick = async () => { await api('PATCH', '/tasks/' + id, { assignee_user_id: b.getAttribute('data-id') }); closeModal(); toast('Pushed ✓'); viewTasks(); });
+  }
   async function viewCareer() {
     const bizIndustryId = State.me.business.industry_id;
     if (!bizIndustryId) {
@@ -1831,7 +1891,9 @@
   }
 
   async function viewStaffHome() {
-    const [me, assignments, myLessons, plans] = await Promise.all([api('GET', '/me'), api('GET', '/me/assignments'), api('GET', '/me/lessons'), api('GET', '/me/plans')]);
+    const [me, assignments, myLessons, plans, staffTasks] = await Promise.all([api('GET', '/me'), api('GET', '/me/assignments'), api('GET', '/me/lessons'), api('GET', '/me/plans'), api('GET', '/tasks').catch(() => [])]);
+    const myTasks = (staffTasks || []).filter((t) => t.status !== 'done');
+    const tasksHtml = myTasks.length ? '<div class="section-title" style="margin-top:1.8rem"><h3>✅ Your tasks</h3></div><div class="row-list">' + myTasks.map((t) => '<div class="row" style="cursor:default"><span class="ic-circle">✅</span><span class="grow"><span class="t">' + esc(t.title) + '</span><span class="s">' + [t.about_name ? 'about ' + esc(t.about_name) : '', t.due ? 'due ' + fmtDate(t.due) : '', t.created_by_name ? 'from ' + esc(t.created_by_name) : ''].filter(Boolean).join(' · ') + '</span></span><button class="btn btn-primary btn-sm staff-task-done" data-id="' + t.id + '">✓ Done</button></div>').join('') + '</div>' : '';
     const pending = assignments.filter((a) => !a.completed);
     const done = assignments.filter((a) => a.completed);
     const checkins = pending.length
@@ -1866,9 +1928,11 @@
       (plansHtml ? '<div class="section-title"><h3>🎯 Your plan</h3></div>' + plansHtml : '') +
       '<a href="#/log" class="cta-log">➕ Log today\'s work</a>' +
       '<div class="section-title" style="margin-top:1.4rem"><h3>📋 Your check-ins</h3>' + (done.length ? '<span class="muted" style="font-size:.85rem">' + done.length + ' done this period</span>' : '') + '</div>' + checkins +
+      tasksHtml +
       (lessonsHtml ? '<div class="section-title" style="margin-top:1.8rem"><h3>📚 Your lessons</h3></div>' + lessonsHtml : '') +
       (pathCard ? '<div class="section-title" style="margin-top:1.8rem"><h3>Your career & pay</h3></div>' + pathCard : ''),
       'home');
+    root().querySelectorAll('.staff-task-done').forEach((b) => b.onclick = async () => { await api('POST', '/tasks/' + b.getAttribute('data-id') + '/done', {}); toast('Nice — done ✓'); viewStaffHome(); });
   }
 
   async function viewStaffCheckin(id) {
@@ -2131,6 +2195,7 @@
       if (hash.indexOf('#/new') === 0) return await viewNewCase();
       if (hash.indexOf('#/cases') === 0) return await viewCases();
       if (hash.indexOf('#/onboarding') === 0) return await viewOnboarding();
+      if (hash.indexOf('#/tasks') === 0) return await viewTasks();
       if (hash.indexOf('#/team') === 0) return await viewTeam();
       if (hash.indexOf('#/documents') === 0) return await viewDocuments();
       if (hash.indexOf('#/career') === 0) return await viewCareer();
