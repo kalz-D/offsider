@@ -227,9 +227,9 @@
   // ---------------- dashboard ----------------
   function gentleDue(dd) { if (dd <= -8) return 'whenever you get a sec'; if (dd < 0) return 'a bit overdue'; if (dd === 0) return 'today'; if (dd <= 2) return 'in a day or two'; return 'soon'; }
   async function viewDashboard() {
-    const [d, coach, upcoming, leave, suggestions, onboarding, interviews] = await Promise.all([
+    const [d, coach, upcoming, leave, suggestions, onboarding, interviews, hrc] = await Promise.all([
       api('GET', '/dashboard'), api('GET', '/coach'), api('GET', '/lifecycle'),
-      api('GET', '/leave').catch(() => []), api('GET', '/suggestions').catch(() => []), api('GET', '/onboarding').catch(() => []), api('GET', '/interviews/upcoming').catch(() => [])
+      api('GET', '/leave').catch(() => []), api('GET', '/suggestions').catch(() => []), api('GET', '/onboarding').catch(() => []), api('GET', '/interviews/upcoming').catch(() => []), api('GET', '/hr-coach').catch(() => null)
     ]);
     const s = d.stats;
     const firstName = State.me.name.split(' ')[0];
@@ -272,12 +272,23 @@
     const banner = d.industrySet ? '' :
       '<a href="#/career" class="banner" style="text-decoration:none"><span style="font-size:1.6rem">🚀</span><span class="grow"><strong>Set up career paths</strong><span class="muted" style="font-size:.9rem;display:block">Pick your industry so Offsider can map your crew\'s pay and progression.</span></span><span class="btn btn-primary btn-sm">Set up</span></a>';
 
+    const hrTips = (hrc && hrc.tips) || [];
+    const hrCoachCard = hrTips.length ? (function () {
+      const t = hrTips[(new Date().getDate()) % hrTips.length];
+      return '<div class="section-soft">Your HR offsider 💡</div>' +
+        '<div class="coach-card tone-positive"><div class="grow"><div class="ct">' + esc(t.title) + '</div><div class="cp">' + esc(t.body) + '</div></div></div>' +
+        '<div style="margin:.4rem 0 .2rem;display:flex;gap:.4rem;flex-wrap:wrap"><button class="btn btn-ghost btn-sm" id="hrCoachAsk">💬 Ask the coach</button><button class="btn btn-ghost btn-sm" id="hrCoachMore">More tips</button></div>';
+    })() : '';
+
     const content = banner +
       hero +
       '<div class="section-soft">Worth a look' + (actions.length ? ' · ' + actions.length : '') + '</div>' + look +
       nudge +
+      hrCoachCard +
       strip;
     layout('home', 'G\'day, ' + firstName, content);
+    const hca = $('#hrCoachAsk'); if (hca) hca.onclick = () => openHrCoach(hrc, true);
+    const hcm = $('#hrCoachMore'); if (hcm) hcm.onclick = () => openHrCoach(hrc, false);
   }
 
   // ---------------- cases list ----------------
@@ -1387,7 +1398,7 @@
     layout('team', e.name,
       header + scheduleSection +
       '<div class="section-title" style="margin-top:1.8rem"><h3>💰 Pay & progression ' + refChip('pay', 'award classification minimum wage pay slip records', 'Pay, awards &amp; records') + '</h3></div>' + wagePanel + allowancesSection +
-      '<div class="section-title" style="margin-top:1.8rem"><h3>🚀 Development</h3></div>' + devPanel +
+      '<div class="section-title" style="margin-top:1.8rem"><h3>🚀 Development</h3><button class="btn btn-ghost btn-sm" id="askCoachDev">💡 Ask the coach</button></div>' + devPanel +
       lessonsSection + planSection +
       '<div class="section-title" style="margin-top:1.8rem"><h3>📝 Notes & observations</h3></div>' + notesList + noteForm +
       casesSection + docsSection, '<a href="#/team">Workers</a>');
@@ -1429,6 +1440,7 @@
     const al = $('#assignLesson'); if (al) al.onclick = () => openLessonAssign(e.id);
     const ap = $('#assignPlan'); if (ap) ap.onclick = () => openPlanModal(e.id);
     const aa = $('#addAllow'); if (aa) aa.onclick = () => openAllowanceAdd(e.id);
+    const acd = $('#askCoachDev'); if (acd) acd.onclick = () => openHrCoach(null, true, 'How do I help ' + firstName + ' develop and step up?');
     root().querySelectorAll('.allow-del').forEach((b) => { b.onclick = async () => { await api('DELETE', '/allowances/' + b.getAttribute('data-id')); viewMember(e.id); }; });
     root().querySelectorAll('.moment-done').forEach((b) => { b.onclick = async () => { await api('POST', '/lifecycle/done', { employee_id: e.id, rule_id: b.dataset.r, occurrence_key: b.dataset.k }); viewMember(e.id); }; });
     root().querySelectorAll('.moment-do').forEach((b) => { b.onclick = () => { const m = (e.schedule || []).find((x) => x.rule_id === b.dataset.r && x.occurrence_key === b.dataset.k); if (m) doMoment(e, m); }; });
@@ -1918,6 +1930,36 @@
     };
   }
 
+  async function openHrCoach(preloaded, focusAsk, prefill) {
+    const hrc = preloaded || await api('GET', '/hr-coach').catch(() => ({ tips: [], suggestions: [], canAsk: true, askConfigured: false }));
+    const tips = (hrc && hrc.tips) || [];
+    const sugg = (hrc && hrc.suggestions) || [];
+    const canAsk = !!(hrc && hrc.canAsk);
+    const askBox = canAsk
+      ? '<div class="field"><label>Ask your HR offsider</label><textarea id="hcQ" rows="2" placeholder="' + esc(hrc.askIntro || 'Ask anything about managing your crew…') + '"></textarea></div>' +
+        (sugg.length ? '<div class="chip-grid" style="margin-bottom:.6rem">' + sugg.map((s) => '<button type="button" class="log-chip hc-sugg" data-q="' + esc(s) + '">' + esc(s) + '</button>').join('') + '</div>' : '') +
+        '<button class="btn btn-primary btn-sm" id="hcAskBtn">Ask</button>' +
+        '<div id="hcAnswer" style="margin-top:.7rem;white-space:pre-wrap;line-height:1.5"></div>'
+      : '';
+    const tipsHtml = tips.length ? '<div class="alabel" style="margin-top:' + (canAsk ? '1.1rem' : '0') + '">Pointers</div>' + tips.map((t) => '<div class="card card-pad" style="margin-bottom:.5rem"><strong>' + esc(t.title) + '</strong><div class="muted" style="font-size:.9rem;margin-top:.2rem">' + esc(t.body) + '</div></div>').join('') : '';
+    openModal('<h2>💡 HR offsider</h2>' + (canAsk && !hrc.askConfigured ? '<p class="muted" style="font-size:.88rem">The “ask anything” part switches on once your AI key (ANTHROPIC_API_KEY) is set. Meanwhile, here are some pointers.</p>' : '') + askBox + tipsHtml + '<div class="modal-foot"><button class="btn btn-ghost" id="hcClose">Close</button></div>');
+    $('#hcClose').onclick = closeModal;
+    document.querySelectorAll('.hc-sugg').forEach((b) => { b.onclick = () => { const ta = $('#hcQ'); if (ta) { ta.value = b.getAttribute('data-q'); ta.focus(); } }; });
+    const ab = $('#hcAskBtn'); if (ab) ab.onclick = async () => {
+      const q = (($('#hcQ') || {}).value || '').trim(); const out = $('#hcAnswer');
+      if (!q) { out.innerHTML = '<span style="color:#c0392b">Type a question first.</span>'; return; }
+      ab.disabled = true; const t0 = ab.textContent; ab.textContent = 'Thinking…'; out.textContent = 'Thinking…';
+      try {
+        const r = await api('POST', '/hr-coach/ask', { question: q });
+        if (r && r.ok) out.textContent = r.answer || '(no answer)';
+        else if (r && r.reason === 'not_configured') out.innerHTML = '<span style="color:#c0392b">The “ask anything” part needs the AI key (ANTHROPIC_API_KEY) set in Render.</span>';
+        else out.innerHTML = '<span style="color:#c0392b">Couldn’t answer that just now — give it another go.</span>';
+      } catch (e) { out.innerHTML = '<span style="color:#c0392b">Something went wrong — try again.</span>'; }
+      ab.disabled = false; ab.textContent = t0;
+    };
+    const ta0 = $('#hcQ'); if (ta0 && prefill) ta0.value = prefill;
+    if (focusAsk && canAsk && ta0) ta0.focus();
+  }
   function openGiveAllowance(employees) {
     if (!employees || !employees.length) { toast('Add a worker first', 'error'); return; }
     openModal('<h2>Give a worker an allowance</h2><p class="muted">Pick who it\'s for — then choose the allowance or set your own.</p><div class="row-list">' +

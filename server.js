@@ -31,6 +31,7 @@ const wellbeingKit = require('./content/wellbeingKit');
 const allowanceKit = require('./content/allowances');
 const careersCopy = require('./content/careersCopy');
 const jobAdKit = require('./content/jobAdKit');
+const hrCoach = require('./content/hrCoach');
 const nodemailer = require('nodemailer');
 
 // Email sending is OFF until SMTP creds are set in the environment (SMTP_HOST/USER/PASS).
@@ -819,6 +820,37 @@ app.get('/api/inbox-status', (req, res) => res.json({
 app.post('/api/inbox/check', h(async (req, res) => {
   if (!INBOX.configured) return res.json({ ok: false, reason: 'not_configured' });
   res.json(await pollMailbox({ limit: 25 }));
+}));
+// ---------- HR coach (curated tips always; "ask anything" runs on ANTHROPIC_API_KEY) ----------
+app.get('/api/hr-coach', h(async (req, res) => {
+  const manager = req.user.role === 'owner' || req.user.role === 'manager';
+  res.json({
+    tips: manager ? hrCoach.managerTips : hrCoach.workerTips,
+    askIntro: hrCoach.askIntro,
+    suggestions: manager ? hrCoach.askSuggestions : [],
+    canAsk: manager,
+    askConfigured: AI.configured
+  });
+}));
+app.post('/api/hr-coach/ask', h(async (req, res) => {
+  const q = (req.body && req.body.question ? String(req.body.question) : '').trim();
+  if (!q) return res.status(400).json({ error: 'Type a question first.' });
+  if (!AI.configured) return res.json({ ok: false, reason: 'not_configured' });
+  const client = getAnthropic();
+  const industry = req.business.industry_id ? ((industryById(req.business.industry_id) || {}).name || '') : '';
+  try {
+    const resp = await client.messages.create({
+      model: AI.model,
+      max_tokens: 700,
+      system: "You are Offsider's HR coach for a small Australian business — warm, plain-spoken and practical, like a sharp mate who's run teams for years. The person asking is " + (req.user.role === 'owner' ? 'the owner' : 'a manager') + " of " + (industry ? ('a ' + industry + ' business') : 'a small business') + " called " + (req.business.name || 'their business') + ". Give genuinely useful, specific guidance on managing and developing people — tough conversations, feedback, fair process, check-ins, motivation, keeping good people. Use Australian context (Fair Work, the NES, awards) where it matters, but stay human, not legalistic. Be concise: a few short paragraphs or a short list, no preamble, no sign-off. If something is a real legal or safety risk (dismissal, discrimination, bullying, serious safety), say so plainly and suggest they check Offsider's Legal references or get proper advice — you coach, you don't give a legal ruling.",
+      messages: [{ role: 'user', content: q.slice(0, 2000) }]
+    });
+    const answer = ((resp.content || []).find((b) => b.type === 'text') || {}).text || '';
+    res.json({ ok: true, answer });
+  } catch (e) {
+    console.error('hr-coach ask failed:', e.message);
+    return res.json({ ok: false, reason: 'ai_failed', error: e.message });
+  }
 }));
 // Send a real test text so the manager can prove the SMS connection actually works (not just env-vars-present).
 app.post('/api/sms/test', h(async (req, res) => {
