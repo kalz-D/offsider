@@ -1482,7 +1482,7 @@
       });
       return;
     }
-    const [pack, employees, payScale] = await Promise.all([api('GET', '/industries/' + bizIndustryId), api('GET', '/employees'), api('GET', '/pay-scale')]);
+    const [pack, employees, payScale, allowKit] = await Promise.all([api('GET', '/industries/' + bizIndustryId), api('GET', '/employees'), api('GET', '/pay-scale'), api('GET', '/allowance-kit').catch(() => ({ award: [], suggestions: [] }))]);
     const roles = (pack.pathway.roles || []).slice().sort((a, b) => a.level - b.level);
     const payMap = {}; (payScale.roles || []).forEach((r) => { payMap[r.role_id] = r; });
     const anyInternal = (payScale.roles || []).some((r) => r.internal && r.internal.rate != null);
@@ -1525,18 +1525,28 @@
       '<p class="muted" style="max-width:66ch;margin-top:-.3rem">Invent any title that suits your business — “Training Supervisor”, “2IC”, “Lead Hand”. Anchor each to the award classification whose <em>actual duties</em> match the work — that sets the legal floor — then pay above it. The title is yours; the floor keeps you compliant. ' + refChip('pay', 'classification award duties minimum wage', 'How titles map to the award') + '</p>' +
       ((payScale.positions && payScale.positions.length) ? payScale.positions.map(posCard).join('') : '<div class="muted">None yet — add internal titles like a Training Supervisor or 2IC.</div>');
 
+    const aBasis = (b) => (b === 'week' ? '/wk' : b === 'shift' ? '/shift' : '/hr');
+    const allowCard = (a) => '<div class="card card-pad" style="margin-bottom:.5rem"><div class="grow"><strong>' + esc(a.name) + '</strong> &nbsp;<strong style="font-family:var(--font-head);color:var(--brand-700)">+' + money(a.amount) + aBasis(a.basis) + '</strong>' + (a.note ? '<div class="muted" style="font-size:.85rem;margin-top:.2rem">' + esc(a.note) + '</div>' : '') + '</div></div>';
+    const allowancesSection = '<div class="section-title" style="margin-top:1.8rem"><h3>💵 Allowances &amp; loadings</h3>' + (employees.length ? '<button class="btn btn-primary btn-sm" id="giveAllow">+ Give a worker one</button>' : '') + '</div>' +
+      '<p class="muted" style="max-width:66ch;margin-top:-.3rem">' + esc(allowKit.intro || 'A top-up for extra responsibility, paid on top of someone\'s rate without changing their classification.') + ' ' + refChip('pay', 'allowance loading leading hand award', 'Allowances & loadings') + '</p>' +
+      '<div class="callout" style="background:var(--brand-50);border:1px solid transparent;border-radius:var(--r);padding:.7rem .9rem;margin-bottom:.9rem;font-size:.9rem"><strong>The lab-tech-who-trains move:</strong> rather than reclassify them, keep them at their level and add a top-up (e.g. a training allowance) for taking on the new starters. Title stays simple, pay reflects the extra.</div>' +
+      '<div class="alabel">Award allowances' + (aw ? ' (' + esc(aw.code) + ')' : '') + '</div>' + ((allowKit.award || []).map(allowCard).join('') || '<div class="muted">—</div>') +
+      '<div class="alabel" style="margin-top:.7rem">Common top-ups <span class="muted" style="font-weight:400">(above award — your call)</span></div>' + ((allowKit.suggestions || []).map(allowCard).join('') || '<div class="muted">—</div>') +
+      (allowKit.note ? '<p class="muted" style="font-size:.85rem;margin-top:.5rem">' + esc(allowKit.note) + '</p>' : '');
+
     layout('career', 'Career paths',
       '<div class="banner" style="background:var(--brand-50);border-color:transparent"><span style="font-size:1.6rem">' + pack.icon + '</span><div class="grow"><strong>' + esc(pack.name) + ' — ' + esc(pack.pathway.name) + '</strong><div class="muted" style="font-size:.9rem">' + esc(pack.blurb) + '</div></div><button class="btn btn-ghost btn-sm" id="changeInd">Change</button></div>' +
       payIntro +
       '<div class="grid grid-2" style="align-items:start"><div><div class="section-title"><h3>The ladder &amp; pay</h3></div><div class="ladder">' + ladder + '</div></div>' +
       '<div><div class="section-title"><h3>🎫 Tickets to chase</h3></div>' + (tickets || '<div class="muted">—</div>') + '</div></div>' +
-      positionsSection);
+      positionsSection + allowancesSection);
     const ci = $('#changeInd');
     if (ci) ci.onclick = async () => { await api('PATCH', '/business', { industry_id: null }); State.me.business.industry_id = null; viewCareer(); };
     const ss = $('#suggestScale'); if (ss) ss.onclick = async () => { await api('POST', '/pay-scale/suggest', { margin: 0.2 }); toast('Starter scale added — tweak any rung'); viewCareer(); };
     root().querySelectorAll('.rung-edit').forEach((b) => { b.onclick = () => openPayLevelEdit(payMap[b.getAttribute('data-r')]); });
     const ap = $('#addPos'); if (ap) ap.onclick = () => openPositionEdit(null, payScale.awardLevels);
     root().querySelectorAll('.pos-edit').forEach((b) => { b.onclick = () => openPositionEdit((payScale.positions || []).find((p) => p.id === b.getAttribute('data-id')), payScale.awardLevels); });
+    const ga = $('#giveAllow'); if (ga) ga.onclick = () => openGiveAllowance(employees);
   }
   function openPositionEdit(pos, awardLevels) {
     pos = pos || {};
@@ -1908,6 +1918,14 @@
     };
   }
 
+  function openGiveAllowance(employees) {
+    if (!employees || !employees.length) { toast('Add a worker first', 'error'); return; }
+    openModal('<h2>Give a worker an allowance</h2><p class="muted">Pick who it\'s for — then choose the allowance or set your own.</p><div class="row-list">' +
+      employees.map((e) => '<button type="button" class="row give-pick" data-id="' + e.id + '" style="width:100%;text-align:left;cursor:pointer"><span class="ic-circle">👷</span><span class="grow"><span class="t">' + esc(e.name) + '</span>' + (e.job_title ? '<span class="s">' + esc(e.job_title) + '</span>' : '') + '</span></button>').join('') +
+      '</div><div class="modal-foot"><button class="btn btn-ghost" id="gaCancel">Cancel</button></div>');
+    $('#gaCancel').onclick = closeModal;
+    document.querySelectorAll('.give-pick').forEach((b) => { b.onclick = () => { closeModal(); openAllowanceAdd(b.getAttribute('data-id')); }; });
+  }
   async function openAllowanceAdd(employeeId) {
     const kit = await api('GET', '/allowance-kit');
     const chip = (a) => '<button type="button" class="log-chip allow-pick" data-name="' + esc(a.name) + '" data-amt="' + a.amount + '" data-basis="' + a.basis + '" data-note="' + esc(a.note || '') + '">' + esc(a.name) + ' <span class="cu">+$' + a.amount + '/' + (a.basis === 'week' ? 'wk' : 'hr') + '</span></button>';
@@ -1918,7 +1936,7 @@
       '<div class="grid grid-2"><div class="field"><label>Amount $</label><input type="number" id="alAmt" step="0.01" inputmode="decimal" placeholder="e.g. 2.50"></div><div class="field"><label>Per</label><select id="alBasis"><option value="hour">hour</option><option value="week">week</option><option value="shift">shift</option></select></div></div>' +
       '<div class="field"><label>Note (optional)</label><input id="alNote" placeholder="What it\'s for"></div>' +
       '<div class="modal-foot"><button class="btn btn-ghost" id="alCancel">Cancel</button><button class="btn btn-primary" id="alSave">Add allowance</button></div>');
-    root().querySelectorAll('.allow-pick').forEach((b) => { b.onclick = () => { $('#alName').value = b.getAttribute('data-name'); $('#alAmt').value = b.getAttribute('data-amt'); $('#alBasis').value = b.getAttribute('data-basis'); $('#alNote').value = b.getAttribute('data-note'); }; });
+    document.querySelectorAll('.allow-pick').forEach((b) => { b.onclick = () => { $('#alName').value = b.getAttribute('data-name'); $('#alAmt').value = b.getAttribute('data-amt'); $('#alBasis').value = b.getAttribute('data-basis'); $('#alNote').value = b.getAttribute('data-note'); }; });
     $('#alCancel').onclick = closeModal;
     $('#alSave').onclick = async () => { const name = $('#alName').value.trim(); if (!name) { toast('A name is needed', 'error'); return; } await api('POST', '/employees/' + employeeId + '/allowances', { name: name, amount: $('#alAmt').value, basis: $('#alBasis').value, note: $('#alNote').value.trim() }); closeModal(); toast('Allowance added'); viewMember(employeeId); };
   }
