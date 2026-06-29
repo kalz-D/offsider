@@ -138,6 +138,7 @@
       '<aside class="sidebar" id="sidebar">' +
       '<a href="#/" class="logo">' + LOGO + 'Offsider</a>' +
       item('home', '#/', '🏠', 'Home') +
+      item('calendar', '#/calendar', '📅', 'Calendar') +
       item('new', '#/new', '✨', 'Start something') +
       '<div class="nav-group-label">Manage</div>' +
       item('hiring', '#/hiring', '🧑‍💼', 'Hiring') +
@@ -287,6 +288,7 @@
     const content = banner +
       hero +
       '<div class="section-soft">Worth a look' + (actions.length ? ' · ' + actions.length : '') + '</div>' + look +
+      '<a href="#/calendar" class="look-more">📅 See your calendar →</a>' +
       nudge +
       hrCoachCard +
       strip;
@@ -1543,6 +1545,56 @@
     $('#puCancel').onclick = closeModal;
     document.querySelectorAll('.push-pick').forEach((b) => b.onclick = async () => { await api('PATCH', '/tasks/' + id, { assignee_user_id: b.getAttribute('data-id') }); closeModal(); toast('Pushed ✓'); viewTasks(); });
   }
+  let calOffset = 0;
+  async function viewCalendar() {
+    const [interviews, leave, tasks, lifecycle] = await Promise.all([
+      api('GET', '/interviews/upcoming').catch(() => []),
+      api('GET', '/leave').catch(() => []),
+      api('GET', '/tasks').catch(() => []),
+      api('GET', '/lifecycle').catch(() => [])
+    ]);
+    const events = {};
+    const dstr = (d) => { const x = new Date(d); if (isNaN(x)) return null; return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0'); };
+    const add = (date, ev) => { if (!date) return; (events[date] = events[date] || []).push(ev); };
+    (interviews || []).forEach((i) => add(dstr(i.scheduled_at), { icon: '📅', label: 'Interview · ' + (i.candidate_name || 'candidate'), link: '#/candidate/' + i.candidate_id, cls: 'cal-interview' }));
+    (tasks || []).forEach((t) => { if (t.status !== 'done' && t.due) add(String(t.due).slice(0, 10), { icon: '✅', label: 'Task · ' + t.title, link: '#/tasks', cls: 'cal-task' }); });
+    (leave || []).forEach((l) => {
+      const start = l.start_date, end = l.end_date || l.start_date; if (!start) return;
+      let cur = new Date(start + 'T00:00:00'); const last = new Date(end + 'T00:00:00'); let guard = 0;
+      while (cur <= last && guard < 90) { add(dstr(cur), { icon: '🌴', label: (l.employee_name || 'Someone').split(' ')[0] + ' · ' + (l.leave_type || 'leave') + (l.status === 'pending' ? ' (pending)' : ''), link: '#/leave', cls: 'cal-leave' }); cur.setDate(cur.getDate() + 1); guard++; }
+    });
+    (lifecycle || []).forEach((m) => { if (m.daysUntil == null || m.daysUntil < -30 || m.daysUntil > 120) return; const dt = new Date(); dt.setHours(0, 0, 0, 0); dt.setDate(dt.getDate() + m.daysUntil); const fn = (m.employee_name || '').split(' ')[0]; add(dstr(dt), { icon: '👋', label: (m.title || 'Check-in').replace(/\{name\}/g, fn) + (fn ? ' · ' + fn : ''), link: m.employee_id ? '#/member/' + m.employee_id : '#/', cls: 'cal-moment' }); });
+
+    const base = new Date(); base.setHours(0, 0, 0, 0); base.setDate(1); base.setMonth(base.getMonth() + calOffset);
+    const y = base.getFullYear(), mo = base.getMonth();
+    const monthName = base.toLocaleDateString('en-AU', { month: 'long', year: 'numeric' });
+    const firstDow = (new Date(y, mo, 1).getDay() + 6) % 7;
+    const daysInMonth = new Date(y, mo + 1, 0).getDate();
+    const today = todayStr();
+    const dow = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    let cells = '';
+    for (let i = 0; i < firstDow; i++) cells += '<div class="cal-cell cal-empty"></div>';
+    for (let day = 1; day <= daysInMonth; day++) {
+      const d = y + '-' + String(mo + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+      const evs = events[d] || [];
+      cells += '<div class="cal-cell' + (d === today ? ' cal-today' : '') + '"><div class="cal-num">' + day + '</div>' +
+        evs.slice(0, 3).map((e) => '<a href="' + e.link + '" class="cal-chip ' + e.cls + '" title="' + esc(e.label) + '">' + e.icon + ' ' + esc(e.label) + '</a>').join('') +
+        (evs.length > 3 ? '<div class="cal-more">+' + (evs.length - 3) + ' more</div>' : '') + '</div>';
+    }
+    const upcoming = Object.keys(events).filter((d) => d >= today).sort().slice(0, 40);
+    const agenda = upcoming.map((d) => '<div><div class="cal-agenda-date">' + (d === today ? 'Today' : esc(fmtDate(d))) + '</div>' +
+      events[d].map((e) => '<a href="' + e.link + '" class="row" style="margin-bottom:.3rem"><span class="ic-circle">' + e.icon + '</span><span class="grow"><span class="t">' + esc(e.label) + '</span></span><span class="lr-go">›</span></a>').join('') + '</div>').join('');
+
+    layout('calendar', 'Calendar',
+      '<div class="cal-head"><button class="btn btn-ghost btn-sm" id="calPrev">‹</button><h2 style="margin:0">' + esc(monthName) + '</h2><button class="btn btn-ghost btn-sm" id="calNext">›</button>' + (calOffset !== 0 ? '<button class="btn btn-ghost btn-sm" id="calToday">Today</button>' : '') + '</div>' +
+      '<div class="cal-grid-head">' + dow.map((d) => '<div class="cal-dow">' + d + '</div>').join('') + '</div>' +
+      '<div class="cal-grid">' + cells + '</div>' +
+      '<div class="section-title" style="margin-top:1.6rem"><h3>📋 Coming up</h3></div>' +
+      (agenda || '<div class="muted">Nothing scheduled yet. Book an interview, log some leave, or give a task a due date and it\'ll show up here.</div>'));
+    $('#calPrev').onclick = () => { calOffset--; viewCalendar(); };
+    $('#calNext').onclick = () => { calOffset++; viewCalendar(); };
+    const ct = $('#calToday'); if (ct) ct.onclick = () => { calOffset = 0; viewCalendar(); };
+  }
   async function viewCareer() {
     const bizIndustryId = State.me.business.industry_id;
     if (!bizIndustryId) {
@@ -2196,6 +2248,7 @@
       if (hash.indexOf('#/cases') === 0) return await viewCases();
       if (hash.indexOf('#/onboarding') === 0) return await viewOnboarding();
       if (hash.indexOf('#/tasks') === 0) return await viewTasks();
+      if (hash.indexOf('#/calendar') === 0) return await viewCalendar();
       if (hash.indexOf('#/team') === 0) return await viewTeam();
       if (hash.indexOf('#/documents') === 0) return await viewDocuments();
       if (hash.indexOf('#/career') === 0) return await viewCareer();
